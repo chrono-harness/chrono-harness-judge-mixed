@@ -379,3 +379,60 @@ fn missing_named_documents_and_incomplete_costs_are_errors_without_fallback() {
             .contains("E_COST_INPUT")
     );
 }
+
+#[test]
+fn data_query_classifies_only_declared_changes_and_rejects_missing_inputs() {
+    let endpoint = json!({
+        "workflow": "workflow.json",
+        "surfaces": {"a.rs": "product", "settings.json": "membership"},
+        "semantic_fields": [
+            {"path":"settings.json", "pointers":["/rule"], "on":"add-modify-delete"}
+        ],
+    });
+    let mut input = json!({
+        "base": endpoint, "candidate": endpoint, "delta": [delta("settings.json"), delta("a.rs")],
+        "before": {"settings.json":{"rule":"old"}}, "after": {"settings.json":{"rule":"new"}},
+    });
+    let query = |input: &Value| {
+        let raw = serde_json::to_vec(input).unwrap();
+        chrono_judge_mixed::classify_query(raw.as_slice())
+    };
+    let result = query(&input).unwrap();
+    assert_eq!(result["mixed"], true);
+    assert_eq!(result["rule_paths"], json!(["settings.json"]));
+    assert_eq!(result["product_paths"], json!(["a.rs"]));
+    assert_eq!(
+        result["changes"][0]["semantic"][0]["before"]["value"],
+        "old"
+    );
+    input["after"] = json!({});
+    assert!(
+        query(&input)
+            .unwrap_err()
+            .contains("missing named document settings.json")
+    );
+    input["candidate"]["semantic_fields"][0]["on"] = json!("unknown");
+    assert!(
+        query(&input)
+            .unwrap_err()
+            .contains("unknown semantic change mode")
+    );
+}
+
+#[test]
+fn document_selection_uses_rules_from_both_ends_and_present_blobs() {
+    let mut removed = delta("old");
+    removed.new_blob = None;
+    let mut added = delta("new");
+    added.old_blob = None;
+    let rule = |path| json!({"path":path, "pointers":["/value"], "on":"modify-delete-existing"});
+    let raw = serde_json::to_vec(&json!({
+        "base":[rule("old")], "candidate":[rule("new")],
+        "delta":[removed, added, delta("unrelated")],
+    }))
+    .unwrap();
+    assert_eq!(
+        chrono_judge_mixed::document_paths(raw.as_slice()).unwrap(),
+        json!({"base":["old"],"candidate":["new"]})
+    );
+}
