@@ -1,28 +1,72 @@
-use chrono_judge_mixed::produce;
-use chrono_registration_fixture::*;
+use chrono_judge_mixed::{Documents, Endpoint, produce};
 use serde_json::{Value, json};
 
+type Values = Documents;
+const CONFIG: &str = "config.json";
+const FM: &str = "files.json";
+const PROJECTS: &str = "projects.json";
+const WORKFLOW: &str = "workflow.json";
+
 fn fixture() -> Values {
-    let mut v = values();
-    for f in v.get_mut(FM).unwrap()["files"].as_array_mut().unwrap() {
-        f["surface"] = match f["path"].as_str().unwrap() {
-            CONFIG | JUDGES | WORKFLOW => "judge-policy",
-            FM | PROJECTS => "membership",
-            "doc.txt" => "documentation",
-            _ => "product",
-        }
-        .into();
-    }
-    v.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([
-        {"path":PROJECTS,"pointers":["/projects/*/actions","/scripts/*/actions"],"on":"add-modify-delete"},
-        {"path":FM,"pointers":["/files/*/surface"],"on":"modify-delete-existing"}
+    let files: Vec<Value> = [
+        ("src.bin", "product"),
+        ("doc.txt", "documentation"),
+        (CONFIG, "judge-policy"),
+        (FM, "membership"),
+        (PROJECTS, "membership"),
+        (WORKFLOW, "judge-policy"),
+    ]
+    .iter()
+    .map(|(path, surface)| json!({"path":path, "surface":surface, "edges":[]}))
+    .collect();
+    let project = |id| json!({"id":id, "actions":{"execute":{"argv":["build",id]}}});
+    Documents::from([
+        (
+            CONFIG.into(),
+            json!({"semantic_fields":[
+                {"path":PROJECTS,"pointers":["/projects/*/actions","/scripts/*/actions"],"on":"add-modify-delete"},
+                {"path":FM,"pointers":["/files/*/surface"],"on":"modify-delete-existing"}
+            ]}),
+        ),
+        (FM.into(), json!({"files":files})),
+        (
+            PROJECTS.into(),
+            json!({"projects":[project("app"),project("tests")],"scripts":[]}),
+        ),
+        (WORKFLOW.into(), json!({"retirements":[]})),
+    ])
+}
+
+fn endpoint(docs: &Values) -> Endpoint {
+    let surfaces: serde_json::Map<String, Value> = docs[FM]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| {
+            (
+                file["path"].as_str().unwrap().to_owned(),
+                file["surface"].clone(),
+            )
+        })
+        .collect();
+    serde_json::from_value(json!({"workflow":WORKFLOW,"surfaces":surfaces,
+        "semantic_fields":docs[CONFIG]["semantic_fields"]}))
+    .unwrap()
+}
+
+fn add_scripts(docs: &mut Values) {
+    docs.get_mut(PROJECTS).unwrap()["scripts"] = json!([
+        {"id":"script","path":"run.sh","actions":{"execute":{"argv":["run.sh"]}}},
+        {"id":"test","path":"test.sh","actions":{"execute":{"argv":["test.sh"]}}}
     ]);
-    v
 }
 fn report(a: &Values, b: &Values, paths: &[&str]) -> Result<Value, String> {
-    let old = load(a);
-    let new = load(b);
-    let changes = paths.iter().map(|p| delta(p)).collect::<Vec<_>>();
+    let old = endpoint(a);
+    let new = endpoint(b);
+    let changes = paths
+        .iter()
+        .map(|p| serde_json::from_value(delta(p)).unwrap())
+        .collect::<Vec<_>>();
     let costs = fixture_costs(paths);
     let classified = produce(&old, &new, &changes, a, b, &costs)?;
     assert_eq!(classified["schema"], "chrono-rule-changes/v2");
@@ -37,16 +81,9 @@ fn fixture_costs(paths: &[&str]) -> Value {
         .collect();
     json!({"schema":"chrono-costs/v1","declared_before":entries,"declared_after":entries})
 }
-use chrono_harness::wire::Delta;
-fn delta(path: &str) -> Delta {
-    Delta {
-        kind: "M".into(),
-        path: path.into(),
-        old_blob: Some("a".repeat(40)),
-        new_blob: Some("b".repeat(40)),
-        old_mode: Some("100644".into()),
-        new_mode: Some("100644".into()),
-    }
+fn delta(path: &str) -> Value {
+    json!({"kind":"M","path":path,"old_blob":"a".repeat(40),"new_blob":"b".repeat(40),
+           "old_mode":"100644","new_mode":"100644"})
 }
 
 #[test]
@@ -56,7 +93,7 @@ fn ordinary_code_membership_and_edges_do_not_change_rules() {
     b.get_mut(FM).unwrap()["files"]
         .as_array_mut()
         .unwrap()
-        .push(file("new.rs", json!([])));
+        .push(json!({"path":"new.rs","surface":"product","edges":[]}));
     b.get_mut(FM).unwrap()["files"][0]["edges"]
         .as_array_mut()
         .unwrap()
@@ -158,7 +195,7 @@ fn row_reorder_is_neutral_but_ordered_arguments_change_rules() {
 #[test]
 fn script_identity_precedes_path_and_actions_added_are_semantic() {
     let mut a = fixture();
-    script_pair(&mut a, "st");
+    add_scripts(&mut a);
     let mut b = a.clone();
     b.get_mut(PROJECTS).unwrap()["scripts"][0]["path"] = "other.sh".into();
     b.get_mut(PROJECTS).unwrap()["scripts"]
@@ -175,7 +212,7 @@ fn script_identity_precedes_path_and_actions_added_are_semantic() {
     );
     let a = fixture();
     let mut b = a.clone();
-    script_pair(&mut b, "st");
+    add_scripts(&mut b);
     assert_eq!(
         report(&a, &b, &["src.bin", PROJECTS]).unwrap()["mixed"],
         true
@@ -186,8 +223,7 @@ fn script_identity_precedes_path_and_actions_added_are_semantic() {
 fn explicit_wildcards_escaped_keys_null_removal_and_named_documents() {
     let mut a = fixture();
     a.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([{"path":"rules.json","pointers":["/a~1b/~0key/*/value"],"on":"modify-delete-existing"}]);
-    let mut f = file("rules.json", json!([]));
-    f["surface"] = "membership".into();
+    let f = json!({"path":"rules.json","surface":"membership"});
     a.get_mut(FM).unwrap()["files"]
         .as_array_mut()
         .unwrap()
@@ -264,9 +300,7 @@ fn workflow_retirements_use_typed_identity_without_losing_either_obligation() {
             {"kind":"test","id":"shared","replacement":"t","reason":"test obligation"},
             {"kind":"script","id":"shared","replacement":"s","reason":"script obligation"}
         ]);
-        let classify = |b: &Values| {
-            chrono_judge_mixed::classify(&load(&a), &load(b), &[delta(WORKFLOW)], &a, b)
-        };
+        let classify = |b: &Values| report(&a, b, &[WORKFLOW]);
         let mut reordered = a.clone();
         reordered.get_mut(WORKFLOW).unwrap()["retirements"]
             .as_array_mut()
@@ -359,8 +393,8 @@ fn selected_row_subtrees_ignore_reordering_but_operation_sequences_keep_order() 
 #[test]
 fn missing_named_documents_and_incomplete_costs_are_errors_without_fallback() {
     let a = fixture();
-    let old = load(&a);
-    let changes = [delta(PROJECTS)];
+    let old = endpoint(&a);
+    let changes = [serde_json::from_value(delta(PROJECTS)).unwrap()];
     let mut costs = fixture_costs(&[PROJECTS]);
     let mut missing = a.clone();
     missing.remove(PROJECTS);
@@ -422,9 +456,9 @@ fn data_query_classifies_only_declared_changes_and_rejects_missing_inputs() {
 #[test]
 fn document_selection_uses_rules_from_both_ends_and_present_blobs() {
     let mut removed = delta("old");
-    removed.new_blob = None;
+    removed["new_blob"] = Value::Null;
     let mut added = delta("new");
-    added.old_blob = None;
+    added["old_blob"] = Value::Null;
     let rule = |path| json!({"path":path, "pointers":["/value"], "on":"modify-delete-existing"});
     let raw = serde_json::to_vec(&json!({
         "base":[rule("old")], "candidate":[rule("new")],
@@ -435,4 +469,34 @@ fn document_selection_uses_rules_from_both_ends_and_present_blobs() {
         chrono_judge_mixed::document_paths(raw.as_slice()).unwrap(),
         json!({"base":["old"],"candidate":["new"]})
     );
+}
+
+#[path = "../../judge-mixed/src/git_observations.rs"]
+mod git_observations;
+
+#[test]
+fn document_processes_keep_the_original_git_binding_and_acquisition_order() {
+    let first = json!({"binding":"git-a","environment":{},"processes":["config","registries"]});
+    let mut joined = first.clone();
+    git_observations::append(
+        Some(&mut joined),
+        json!({"binding":"git-a","environment":{},"processes":["version","blob"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        joined["processes"],
+        json!(["config", "registries", "version", "blob"])
+    );
+    for extra in [
+        Value::Null,
+        json!({"binding":"git-b","environment":{},"processes":[]}),
+        json!({"binding":"git-a","environment":{"PATH":"new"},"processes":[]}),
+        json!({"binding":"git-a","environment":{},"processes":null}),
+    ] {
+        let mut original = first.clone();
+        assert!(git_observations::append(Some(&mut original), extra).is_err());
+        assert_eq!(original, first);
+    }
+    assert!(git_observations::append(None, first).is_err());
+    git_observations::append(None, Value::Null).unwrap();
 }

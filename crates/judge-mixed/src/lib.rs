@@ -1,35 +1,18 @@
 //! Explicit rule/product DELTA classification. Warnings neither authorize nor block work.
+mod git_observations;
+mod registration;
 mod semantic;
 use chrono_harness::{
     facts,
     wire::{Delta, Finding, Request, Response, Status},
 };
-use chrono_judge_registration::Registrations;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
 mod classification;
-use classification::Endpoint;
+pub use classification::Endpoint;
 pub use classification::{document_paths, query as classify_query};
-
-/// Classify only explicit endpoint surfaces and named semantic fields.
-/// No impact computation, costs, test selection or process execution.
-pub fn classify(
-    a: &Registrations,
-    b: &Registrations,
-    delta: &[Delta],
-    before: &Documents,
-    after: &Documents,
-) -> Result<Value, String> {
-    classify_endpoints(
-        &Endpoint::registered(a, delta)?,
-        &Endpoint::registered(b, delta)?,
-        delta,
-        before,
-        after,
-    )
-}
 
 fn classify_endpoints(
     a: &Endpoint,
@@ -90,10 +73,10 @@ fn classify_endpoints(
         "changes":changes.values().collect::<Vec<_>>(),"product_changes":products.values().collect::<Vec<_>>(),
         "requires_acknowledgement":false}))
 }
-/// Publish the shared classification after validating the predecessor costs.
+/// Publish the classification for the same interpreted inputs used by classify-v1.
 pub fn produce(
-    a: &Registrations,
-    b: &Registrations,
+    a: &Endpoint,
+    b: &Endpoint,
     delta: &[Delta],
     before: &Documents,
     after: &Documents,
@@ -105,7 +88,7 @@ pub fn produce(
     {
         return Err("E_COST_INPUT: missing or unsupported cost report".into());
     }
-    let mut output = classify(a, b, delta, before, after)?;
+    let mut output = classify_endpoints(a, b, delta, before, after)?;
     for d in delta {
         let node = format!("file:{}", d.path);
         for key in ["declared_before", "declared_after"] {
@@ -117,94 +100,11 @@ pub fn produce(
     output["schema"] = MIXED_SCHEMA.into();
     Ok(output)
 }
-/// Known interpreted registries for declaration-only consumers. Other named JSON
-/// must be supplied explicitly; absence is an error when a pattern consumes it.
-pub fn registry_documents(r: &Registrations) -> Documents {
-    let mut out = BTreeMap::from([(r.effective_config_path().into(), r.config().clone())]);
-    out.insert(r.entry_path().into(), r.entry().clone());
-    for (key, value) in [
-        ("judges", r.judges()),
-        ("projects", r.projects()),
-        ("filemap", r.filemap()),
-        ("workflow", r.workflow()),
-    ] {
-        out.insert(
-            r.config()["registries"][key].as_str().unwrap().into(),
-            value.clone(),
-        );
-    }
-    out
-}
-/// Fixed-object reader shared by the mixed and FILEMAP process boundaries.
-pub fn load_documents_with_reader(
-    req: &Request,
-    a: &Registrations,
-    b: &Registrations,
-    reader: &facts::Reader,
-) -> Result<[Documents; 2], String> {
-    load_documents_for_endpoints(
-        &req.candidate.root,
-        &req.base.commit,
-        &req.candidate.commit,
-        &req.delta,
-        a,
-        b,
-        reader,
-    )
-}
-/// Read only explicitly named semantic documents from immutable Git endpoints.
-#[allow(clippy::too_many_arguments)]
-pub fn load_documents_for_endpoints(
-    root: &std::path::Path,
-    base: &str,
-    candidate: &str,
-    delta: &[Delta],
-    a: &Registrations,
-    b: &Registrations,
-    reader: &facts::Reader,
-) -> Result<[Documents; 2], String> {
-    let [old_paths, new_paths] = classification::registered_paths(a, b, delta)?;
-    Ok([
-        documents(root, base, a, &old_paths, reader)?,
-        documents(root, candidate, b, &new_paths, reader)?,
-    ])
-}
-
-fn documents(
-    root: &std::path::Path,
-    commit: &str,
-    r: &Registrations,
-    paths: &BTreeSet<String>,
-    reader: &facts::Reader,
-) -> Result<Documents, String> {
-    let mut docs = Documents::new();
-    for path in paths {
-        let mut value = (path == r.effective_config_path()).then(|| r.config().clone());
-        for (key, registry) in [
-            ("judges", r.judges()),
-            ("projects", r.projects()),
-            ("filemap", r.filemap()),
-            ("workflow", r.workflow()),
-        ] {
-            if r.config()["registries"][key] == *path {
-                value = Some(registry.clone());
-            }
-        }
-        let value = match value {
-            Some(v) => v,
-            None => {
-                let bytes = reader.blob(root, commit, path)?;
-                chrono_harness::decode(&bytes)
-                    .map_err(|e| format!("E_SEMANTIC_INPUT: {path}: {e}"))?
-            }
-        };
-        docs.insert(path.clone(), value);
-    }
-    Ok(docs)
-}
-fn evaluate(req: &Request, reader: &facts::Reader) -> Result<(Value, String), String> {
+fn evaluate(req: &Request, response: &mut Response) -> Result<(Value, String), String> {
     req.validate()?;
-    let (base, candidate, _) = chrono_judge_registration::views_with_reader(req, reader)?;
+    let (mut base, mut candidate) = registration::query(req, response)?;
+    base.endpoint.validate()?;
+    candidate.endpoint.validate()?;
     if req.impact["schema"] != "chrono-filemap-impact/v6" {
         return Err("E_IMPACT: unsupported schema".into());
     }
@@ -233,27 +133,41 @@ fn evaluate(req: &Request, reader: &facts::Reader) -> Result<(Value, String), St
             "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding".into(),
         );
     }
-    let [before, after] = load_documents_with_reader(req, &base, &candidate, reader)?;
-    let mut output = produce(&base, &candidate, &req.delta, &before, &after, costs)?;
-    output["binding"] = binding;
-    Ok((
-        output,
-        candidate.workflow()["mixed_change"]["code"]
-            .as_str()
+    let [old_paths, new_paths] =
+        classification::endpoint_paths(&base.endpoint, &candidate.endpoint, &delta);
+    let mut reader = None;
+    let mut read = |commit: &str, path: &str| {
+        if reader.is_none() {
+            reader = Some(facts::Reader::for_request(req)?);
+        }
+        reader
+            .as_ref()
             .unwrap()
-            .into(),
-    ))
+            .blob(&req.candidate.root, commit, path)
+    };
+    let docs = (|| {
+        let before = base.documents(old_paths, |p| read(&req.base.commit, p))?;
+        let after = candidate.documents(new_paths, |p| read(&req.candidate.commit, p))?;
+        Ok::<_, String>((before, after))
+    })();
+    if let Some(reader) = reader {
+        git_observations::append(response.outputs.get_mut("git_facts"), reader.observation())?;
+    }
+    let (before, after) = docs?;
+    let mut output = produce(
+        &base.endpoint,
+        &candidate.endpoint,
+        &req.delta,
+        &before,
+        &after,
+        costs,
+    )?;
+    output["binding"] = binding;
+    Ok((output, candidate.warning_code))
 }
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
-    let reader = facts::Reader::for_request(req);
-    let result = reader
-        .as_ref()
-        .map_err(Clone::clone)
-        .and_then(|reader| evaluate(req, reader));
-    if let Ok(reader) = &reader {
-        reader.record(&mut response);
-    }
+    let result = evaluate(req, &mut response);
     match result {
         Ok((output, code)) => {
             if output["mixed"] == true {

@@ -1,7 +1,6 @@
 //! Explicit inputs to the classification used by the FILEMAP workflow selector.
 use super::{Documents, classify_endpoints};
 use chrono_harness::wire::Delta;
-use chrono_judge_registration::Registrations;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,9 +8,9 @@ use std::io::Read;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Endpoint {
-    pub workflow: String,
-    pub surfaces: BTreeMap<String, String>,
+pub struct Endpoint {
+    pub(super) workflow: String,
+    pub(super) surfaces: BTreeMap<String, String>,
     semantic_fields: Vec<Rule>,
 }
 
@@ -24,32 +23,7 @@ pub(super) struct Rule {
 }
 
 impl Endpoint {
-    pub fn registered(r: &Registrations, delta: &[Delta]) -> Result<Self, String> {
-        let paths: BTreeSet<_> = delta.iter().map(|d| d.path.as_str()).collect();
-        let mut surfaces = BTreeMap::new();
-        for file in r.filemap()["files"]
-            .as_array()
-            .ok_or("invalid FILEMAP files")?
-        {
-            let path = file["path"].as_str().ok_or("invalid FILEMAP path")?;
-            if paths.contains(path) {
-                surfaces
-                    .entry(path.to_owned())
-                    .or_insert_with(|| file["surface"].as_str().unwrap().to_owned());
-            }
-        }
-        Ok(Self {
-            workflow: r.config()["registries"]["workflow"]
-                .as_str()
-                .ok_or("invalid workflow path")?
-                .to_owned(),
-            surfaces,
-            semantic_fields: serde_json::from_value(r.config()["semantic_fields"].clone())
-                .map_err(|e| e.to_string())?,
-        })
-    }
-
-    pub fn patterns(&self, other: &Self) -> BTreeSet<(String, String, String)> {
+    pub(super) fn patterns(&self, other: &Self) -> BTreeSet<(String, String, String)> {
         self.semantic_fields
             .iter()
             .chain(&other.semantic_fields)
@@ -61,7 +35,7 @@ impl Endpoint {
             .collect()
     }
 
-    fn validate(&self) -> Result<(), String> {
+    pub(super) fn validate(&self) -> Result<(), String> {
         if self.surfaces.values().any(|s| {
             !matches!(
                 s.as_str(),
@@ -128,16 +102,8 @@ fn required_paths(base: &[Rule], candidate: &[Rule], delta: &[Delta]) -> [BTreeS
     selected
 }
 
-pub(super) fn registered_paths(
-    a: &Registrations,
-    b: &Registrations,
-    delta: &[Delta],
-) -> Result<[BTreeSet<String>; 2], String> {
-    let rules = |r: &Registrations| {
-        serde_json::from_value::<Vec<Rule>>(r.config()["semantic_fields"].clone())
-            .map_err(|e| e.to_string())
-    };
-    Ok(required_paths(&rules(a)?, &rules(b)?, delta))
+pub(super) fn endpoint_paths(a: &Endpoint, b: &Endpoint, delta: &[Delta]) -> [BTreeSet<String>; 2] {
+    required_paths(&a.semantic_fields, &b.semantic_fields, delta)
 }
 
 fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
