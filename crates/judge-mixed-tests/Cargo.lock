@@ -84,7 +84,6 @@ name = "chrono-judge-mixed"
 version = "0.1.0"
 dependencies = [
  "chrono-harness",
- "chrono-judge-registration",
  "serde",
  "serde_json",
 ]
@@ -93,29 +92,7 @@ dependencies = [
 name = "chrono-judge-mixed-tests"
 version = "0.1.0"
 dependencies = [
- "chrono-harness",
  "chrono-judge-mixed",
- "chrono-registration-fixture",
- "serde_json",
-]
-
-[[package]]
-name = "chrono-judge-registration"
-version = "0.1.0"
-source = "git+https://github.com/chrono-harness/chrono-harness-judge-registration.git?rev=76530cce04ad04ebda2f71a16a8a51f930c2daa8#76530cce04ad04ebda2f71a16a8a51f930c2daa8"
-dependencies = [
- "chrono-harness",
- "serde",
- "serde_json",
- "time",
-]
-
-[[package]]
-name = "chrono-registration-fixture"
-version = "0.1.0"
-source = "git+https://github.com/chrono-harness/chrono-harness-judge-registration.git?rev=76530cce04ad04ebda2f71a16a8a51f930c2daa8#76530cce04ad04ebda2f71a16a8a51f930c2daa8"
-dependencies = [
- "chrono-judge-registration",
  "serde_json",
 ]
 
