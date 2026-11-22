@@ -1,0 +1,168 @@
+//! Explicit inputs to the classification used by the FILEMAP workflow selector.
+use super::{Documents, classify_endpoints};
+use chrono_harness::wire::Delta;
+use chrono_judge_registration::Registrations;
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Endpoint {
+    pub workflow: String,
+    pub surfaces: BTreeMap<String, String>,
+    semantic_fields: Vec<Rule>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Rule {
+    path: String,
+    pointers: Vec<String>,
+    on: String,
+}
+
+impl Endpoint {
+    pub fn registered(r: &Registrations, delta: &[Delta]) -> Result<Self, String> {
+        let paths: BTreeSet<_> = delta.iter().map(|d| d.path.as_str()).collect();
+        let mut surfaces = BTreeMap::new();
+        for file in r.filemap()["files"]
+            .as_array()
+            .ok_or("invalid FILEMAP files")?
+        {
+            let path = file["path"].as_str().ok_or("invalid FILEMAP path")?;
+            if paths.contains(path) {
+                surfaces
+                    .entry(path.to_owned())
+                    .or_insert_with(|| file["surface"].as_str().unwrap().to_owned());
+            }
+        }
+        Ok(Self {
+            workflow: r.config()["registries"]["workflow"]
+                .as_str()
+                .ok_or("invalid workflow path")?
+                .to_owned(),
+            surfaces,
+            semantic_fields: serde_json::from_value(r.config()["semantic_fields"].clone())
+                .map_err(|e| e.to_string())?,
+        })
+    }
+
+    pub fn patterns(&self, other: &Self) -> BTreeSet<(String, String, String)> {
+        self.semantic_fields
+            .iter()
+            .chain(&other.semantic_fields)
+            .flat_map(|rule| {
+                rule.pointers
+                    .iter()
+                    .map(|p| (rule.path.clone(), p.clone(), rule.on.clone()))
+            })
+            .collect()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.surfaces.values().any(|s| {
+            !matches!(
+                s.as_str(),
+                "product"
+                    | "test"
+                    | "documentation"
+                    | "membership"
+                    | "instruction-policy"
+                    | "judge-policy"
+                    | "judge-implementation"
+            )
+        }) {
+            return Err("E_SURFACE_REFERENCE: unknown surface".into());
+        }
+        if self.semantic_fields.iter().any(|r| {
+            !matches!(
+                r.on.as_str(),
+                "add-modify-delete" | "modify-delete-existing"
+            )
+        }) {
+            return Err("E_SEMANTIC_INPUT: unknown semantic change mode".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Query {
+    base: Endpoint,
+    candidate: Endpoint,
+    delta: Vec<Delta>,
+    before: Documents,
+    after: Documents,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentSelection {
+    base: Vec<Rule>,
+    candidate: Vec<Rule>,
+    delta: Vec<Delta>,
+}
+
+fn required_paths(base: &[Rule], candidate: &[Rule], delta: &[Delta]) -> [BTreeSet<String>; 2] {
+    let named: BTreeSet<_> = base
+        .iter()
+        .chain(candidate)
+        .filter(|rule| !rule.pointers.is_empty())
+        .map(|rule| rule.path.as_str())
+        .collect();
+    let mut selected = [BTreeSet::new(), BTreeSet::new()];
+    for change in delta
+        .iter()
+        .filter(|change| named.contains(change.path.as_str()))
+    {
+        if change.old_blob.is_some() {
+            selected[0].insert(change.path.clone());
+        }
+        if change.new_blob.is_some() {
+            selected[1].insert(change.path.clone());
+        }
+    }
+    selected
+}
+
+pub(super) fn registered_paths(
+    a: &Registrations,
+    b: &Registrations,
+    delta: &[Delta],
+) -> Result<[BTreeSet<String>; 2], String> {
+    let rules = |r: &Registrations| {
+        serde_json::from_value::<Vec<Rule>>(r.config()["semantic_fields"].clone())
+            .map_err(|e| e.to_string())
+    };
+    Ok(required_paths(&rules(a)?, &rules(b)?, delta))
+}
+
+fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
+    let mut bytes = Vec::new();
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    input
+        .take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > LIMIT {
+        return Err("E_SEMANTIC_INPUT: input exceeds 64 MiB".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("E_SEMANTIC_INPUT: {e}"))
+}
+
+pub fn document_paths(input: impl Read) -> Result<Value, String> {
+    let request: DocumentSelection = read(input)?;
+    let [base, candidate] = required_paths(&request.base, &request.candidate, &request.delta);
+    Ok(serde_json::json!({"base":base,"candidate":candidate}))
+}
+
+/// Evaluate caller-provided endpoint data without inspecting the filesystem.
+pub fn query(input: impl Read) -> Result<Value, String> {
+    let q: Query = read(input)?;
+    q.base.validate()?;
+    q.candidate.validate()?;
+    classify_endpoints(&q.base, &q.candidate, &q.delta, &q.before, &q.after)
+}

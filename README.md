@@ -5,3 +5,7 @@
 运行 `./check.sh` 验证独立组件。
 
 [固定来源](https://github.com/ChronoAIProject/chrono-harness/tree/5f6892dfa2f73675a84e4ebdc3b06eb83b824d6e/crates/judge-mixed)
+
+供 FILEMAP 使用的 `chrono-judge-mixed classify-v1` 从 stdin 读取 JSON。调用者给出 `base`、`candidate`、`delta`、`before` 和 `after`。两个端点分别包含工作流路径 `workflow`、本次各路径的 `surfaces` 映射及配置中的 `semantic_fields`。后两个对象按路径提供已声明语义字段所需的 JSON。调用者负责从固定端点取得这些数据。命令复用本仓判官的分类，成功向 stdout 返回规则路径、产品路径和具体变化，退出 0；输入无效时向 stderr 写出原因，退出 2。
+
+需要从 Git 读取语义文档时，先向 `chrono-judge-mixed document-paths-v1` 提交 `base`、`candidate` 两组 semantic_fields 和 `delta`。返回的两个同名路径数组分别列出该端点存在且分类需要的文件。两个数据命令的 stdin 上限均为 64 MiB。

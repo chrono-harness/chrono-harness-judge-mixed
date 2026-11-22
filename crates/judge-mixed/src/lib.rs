@@ -9,29 +9,10 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
-fn patterns(a: &Registrations, b: &Registrations) -> BTreeSet<(String, String, String)> {
-    [a, b]
-        .into_iter()
-        .flat_map(|r| r.config()["semantic_fields"].as_array().unwrap())
-        .flat_map(|row| {
-            row["pointers"].as_array().unwrap().iter().map(|p| {
-                (
-                    row["path"].as_str().unwrap().into(),
-                    p.as_str().unwrap().into(),
-                    row["on"].as_str().unwrap().into(),
-                )
-            })
-        })
-        .collect()
-}
-fn surface(r: &Registrations, path: &str) -> Option<String> {
-    r.filemap()["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["path"] == path)
-        .map(|f| f["surface"].as_str().unwrap().to_string())
-}
+mod classification;
+use classification::Endpoint;
+pub use classification::{document_paths, query as classify_query};
+
 /// Classify only explicit endpoint surfaces and named semantic fields.
 /// No impact computation, costs, test selection or process execution.
 pub fn classify(
@@ -41,12 +22,28 @@ pub fn classify(
     before: &Documents,
     after: &Documents,
 ) -> Result<Value, String> {
-    let patterns = patterns(a, b);
+    classify_endpoints(
+        &Endpoint::registered(a, delta)?,
+        &Endpoint::registered(b, delta)?,
+        delta,
+        before,
+        after,
+    )
+}
+
+fn classify_endpoints(
+    a: &Endpoint,
+    b: &Endpoint,
+    delta: &[Delta],
+    before: &Documents,
+    after: &Documents,
+) -> Result<Value, String> {
+    let patterns = a.patterns(b);
     let mut changes = BTreeMap::new();
     let mut products = BTreeMap::new();
     for d in delta {
-        let old = surface(a, &d.path);
-        let new = surface(b, &d.path);
+        let old = a.surfaces.get(&d.path).cloned();
+        let new = b.surfaces.get(&d.path).cloned();
         let surfaces: BTreeSet<_> = old.iter().chain(new.iter()).map(String::as_str).collect();
         if surfaces.is_empty() {
             return Err(format!(
@@ -72,8 +69,8 @@ pub fn classify(
                 after.get(path),
                 pointer,
                 on,
-                a.config()["registries"]["workflow"] == *path,
-                b.config()["registries"]["workflow"] == *path,
+                a.workflow == *path,
+                b.workflow == *path,
             )?);
         }
         let is_product = surfaces.iter().any(|s| matches!(*s, "product" | "test"));
@@ -166,34 +163,22 @@ pub fn load_documents_for_endpoints(
     b: &Registrations,
     reader: &facts::Reader,
 ) -> Result<[Documents; 2], String> {
-    let paths = patterns(a, b).into_iter().map(|(p, _, _)| p).collect();
+    let [old_paths, new_paths] = classification::registered_paths(a, b, delta)?;
     Ok([
-        documents(root, base, delta, a, true, &paths, reader)?,
-        documents(root, candidate, delta, b, false, &paths, reader)?,
+        documents(root, base, a, &old_paths, reader)?,
+        documents(root, candidate, b, &new_paths, reader)?,
     ])
 }
 
 fn documents(
     root: &std::path::Path,
     commit: &str,
-    delta: &[Delta],
     r: &Registrations,
-    base: bool,
     paths: &BTreeSet<String>,
     reader: &facts::Reader,
 ) -> Result<Documents, String> {
     let mut docs = Documents::new();
     for path in paths {
-        let exists = delta.iter().find(|d| &d.path == path).is_some_and(|d| {
-            if base {
-                d.old_blob.is_some()
-            } else {
-                d.new_blob.is_some()
-            }
-        });
-        if !exists {
-            continue;
-        }
         let mut value = (path == r.effective_config_path()).then(|| r.config().clone());
         for (key, registry) in [
             ("judges", r.judges()),
