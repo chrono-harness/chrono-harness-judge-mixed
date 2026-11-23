@@ -10,4 +10,4 @@
 
 需要从 Git 读取语义文档时，先向 `chrono-judge-mixed document-paths-v1` 提交 `base`、`candidate` 两组 semantic_fields 和 `delta`。返回的两个同名路径数组分别列出该端点存在且分类需要的文件。两个数据命令的 stdin 上限均为 64 MiB。
 
-宿主调用原生 `--protocol chrono-judge/v1` 时，从生效的 PATH 选择固定安装的 chrono-judge-registration，使用 `classification-views-v1` 核对端点登记。mixed 检查 FILEMAP 和成本前置结果，在指定提交读取其他已声明的语义文件，并在响应中保留绑定的 Git 读取记录。单独运行上述两个数据命令只需 mixed 本身。
+宿主调用原生 `--protocol chrono-judge/v1` 时，需要已安装的 `chrono-harness judge-pipeline` 和 `chrono-judge-registration classification-inputs-v1`。runner 核对封存请求和进程限额。mixed 核对 FILEMAP 和成本前置结果，按语义声明选择路径。registration 解释两端登记、读取所选提交中的文档，并在响应中保留绑定的 Git 读取记录。单独运行 `classify-v1` 和 `document-paths-v1` 只需 mixed 本身。

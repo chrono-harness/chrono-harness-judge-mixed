@@ -471,32 +471,43 @@ fn document_selection_uses_rules_from_both_ends_and_present_blobs() {
     );
 }
 
-#[path = "../../judge-mixed/src/git_observations.rs"]
-mod git_observations;
-
 #[test]
-fn document_processes_keep_the_original_git_binding_and_acquisition_order() {
-    let first = json!({"binding":"git-a","environment":{},"processes":["config","registries"]});
-    let mut joined = first.clone();
-    git_observations::append(
-        Some(&mut joined),
-        json!({"binding":"git-a","environment":{},"processes":["version","blob"]}),
-    )
-    .unwrap();
+fn native_plan_requires_matching_predecessors_before_selecting_documents() {
+    let change = delta(PROJECTS);
+    let fields = fixture()[CONFIG]["semantic_fields"].clone();
+    let end =
+        json!({"workflow":WORKFLOW,"surfaces":{PROJECTS:"membership"},"semantic_fields":fields});
+    let impact = json!({"schema":"chrono-filemap-impact/v6","delta":[change]});
+    let binding = json!({"base":"a","candidate":"b","candidate_tree":"c","registry_digest":"d","context_digest":"e"});
+    let mut costs = fixture_costs(&[PROJECTS]);
+    costs["binding"] = binding.clone();
+    let q = json!({"base":end,"candidate":end,"delta":[change],"impact":impact,
+        "prior_impacts":[impact],"prior_costs":[costs],"binding":binding});
+    let plan =
+        |q: &Value| chrono_judge_mixed::native::plan(serde_json::to_vec(q).unwrap().as_slice());
     assert_eq!(
-        joined["processes"],
-        json!(["config", "registries", "version", "blob"])
+        plan(&q).unwrap(),
+        json!({"base":[PROJECTS],"candidate":[PROJECTS],"context":{"binding":binding,"costs":costs}})
     );
-    for extra in [
-        Value::Null,
-        json!({"binding":"git-b","environment":{},"processes":[]}),
-        json!({"binding":"git-a","environment":{"PATH":"new"},"processes":[]}),
-        json!({"binding":"git-a","environment":{},"processes":null}),
+    for (field, value, error) in [
+        ("prior_impacts", json!([]), "E_IMPACT"),
+        ("prior_costs", json!([]), "E_COST_INPUT"),
+        ("binding", json!({}), "E_COST_INPUT"),
     ] {
-        let mut original = first.clone();
-        assert!(git_observations::append(Some(&mut original), extra).is_err());
-        assert_eq!(original, first);
+        let mut bad = q.clone();
+        bad[field] = value;
+        assert!(plan(&bad).unwrap_err().starts_with(error));
     }
-    assert!(git_observations::append(None, first).is_err());
-    git_observations::append(None, Value::Null).unwrap();
+    for (field, value) in [
+        ("kind", json!("D")),
+        ("path", json!("other")),
+        ("old_blob", Value::Null),
+        ("new_blob", Value::Null),
+        ("old_mode", Value::Null),
+        ("new_mode", Value::Null),
+    ] {
+        let mut bad = q.clone();
+        bad["delta"][0][field] = value;
+        assert!(plan(&bad).unwrap_err().starts_with("E_IMPACT"));
+    }
 }
