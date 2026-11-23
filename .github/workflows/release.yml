@@ -48,9 +48,10 @@ jobs:
           set -euo pipefail
           cargo build --release --locked --manifest-path crates/judge-mixed/Cargo.toml
           binary="$CARGO_TARGET_DIR/release/chrono-judge-mixed"
-          "$binary" --version | grep -Ex 'chrono-judge-mixed [0-9]+[.][0-9]+[.][0-9]+'
+          env PATH= "$binary" --version | grep -Ex 'chrono-judge-mixed [0-9]+[.][0-9]+[.][0-9]+'
           query='{"base":{"workflow":"w","surfaces":{},"semantic_fields":[]},"candidate":{"workflow":"w","surfaces":{},"semantic_fields":[]},"delta":[],"before":{},"after":{}}'
-          "$binary" classify-v1 <<< "$query" | jq -e '.mixed == false and .rule_paths == [] and .product_paths == []'
+          env PATH= "$binary" classify-v1 <<< "$query" | jq -e '.mixed == false and .rule_paths == [] and .product_paths == []'
+          env PATH= "$binary" document-paths-v1 <<< '{"base":[],"candidate":[],"delta":[]}' | jq -e '. == {"base":[],"candidate":[]}'
           mkdir "$RUNNER_TEMP/dist"
           cp "$CARGO_TARGET_DIR/release/chrono-judge-mixed" "$RUNNER_TEMP/dist/chrono-judge-mixed-$PLATFORM"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
