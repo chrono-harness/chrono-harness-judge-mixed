@@ -3,6 +3,10 @@ fn main() -> std::process::ExitCode {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments == [std::ffi::OsStr::new("--version")] {
+        println!("chrono-judge-mixed {}", env!("CARGO_PKG_VERSION"));
+        return std::process::ExitCode::SUCCESS;
+    }
     let mut args = arguments.iter();
     let operation = args.next();
     let operation = operation.and_then(|arg| arg.to_str());
