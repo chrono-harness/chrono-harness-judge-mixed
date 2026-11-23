@@ -1,6 +1,6 @@
 //! Explicit inputs to the classification used by the FILEMAP workflow selector.
 use super::{Documents, classify_endpoints};
-use chrono_harness::wire::Delta;
+use crate::Delta;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,7 +106,7 @@ pub(super) fn endpoint_paths(a: &Endpoint, b: &Endpoint, delta: &[Delta]) -> [BT
     required_paths(&a.semantic_fields, &b.semantic_fields, delta)
 }
 
-fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
+pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
     let mut bytes = Vec::new();
     const LIMIT: u64 = 64 * 1024 * 1024;
     input
