@@ -1,4 +1,4 @@
-use chrono_judge_mixed::{Documents, Endpoint, produce};
+use chrono_judge_mixed::{Delta, Documents, Endpoint, produce};
 use serde_json::{Value, json};
 
 type Values = Documents;
@@ -412,6 +412,65 @@ fn missing_named_documents_and_incomplete_costs_are_errors_without_fallback() {
             .unwrap_err()
             .contains("E_COST_INPUT")
     );
+}
+
+#[test]
+fn costs_report_the_first_missing_endpoint_in_delta_order() {
+    let docs = fixture();
+    let end = endpoint(&docs);
+    let paths = [PROJECTS, WORKFLOW];
+    let changes: Vec<_> = paths
+        .iter()
+        .map(|path| serde_json::from_value(delta(path)).unwrap())
+        .collect();
+    let base = fixture_costs(&paths);
+    let run = |costs: &Value, items: &[Delta]| produce(&end, &end, items, &docs, &docs, costs);
+    assert!(run(&base, &changes).is_ok());
+    assert!(run(&base, &[]).is_ok());
+    for (before, after, expected) in [
+        (
+            vec![PROJECTS],
+            vec![],
+            format!("declared_before lacks changed path file:{PROJECTS}"),
+        ),
+        (
+            vec![],
+            vec![WORKFLOW],
+            format!("declared_after lacks changed path file:{WORKFLOW}"),
+        ),
+        (
+            vec![PROJECTS],
+            vec![PROJECTS],
+            format!("declared_before lacks changed path file:{PROJECTS}"),
+        ),
+        (
+            vec![WORKFLOW],
+            vec![PROJECTS],
+            format!("declared_after lacks changed path file:{PROJECTS}"),
+        ),
+    ] {
+        let mut costs = base.clone();
+        for (side, missing) in [("declared_before", before), ("declared_after", after)] {
+            for path in missing {
+                costs[side]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(&format!("file:{path}"));
+            }
+        }
+        assert_eq!(
+            run(&costs, &changes).unwrap_err(),
+            format!("E_COST_INPUT: {expected}")
+        );
+    }
+    for field in ["schema", "declared_before", "declared_after"] {
+        let mut invalid = base.clone();
+        invalid[field] = Value::Null;
+        assert_eq!(
+            run(&invalid, &[]).unwrap_err(),
+            "E_COST_INPUT: missing or unsupported cost report"
+        );
+    }
 }
 
 #[test]
