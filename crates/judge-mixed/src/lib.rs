@@ -1,9 +1,10 @@
 //! Explicit rule/product DELTA classification. Warnings neither authorize nor block work.
 pub mod native;
 mod semantic;
+mod verified_classification;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
 /// Serializable DELTA entries accepted by the versioned classification commands.
@@ -34,16 +35,13 @@ fn classify_endpoints(
     for d in delta {
         let old = a.surfaces.get(&d.path).cloned();
         let new = b.surfaces.get(&d.path).cloned();
-        let surfaces: BTreeSet<_> = old.iter().chain(new.iter()).map(String::as_str).collect();
-        if surfaces.is_empty() {
+        let Some(surfaces) = verified_classification::endpoints(old.as_deref(), new.as_deref())
+        else {
             return Err(format!(
                 "E_SURFACE_REFERENCE: no registration for {}",
                 d.path
             ));
-        }
-        let executable_rule = surfaces
-            .iter()
-            .any(|s| matches!(*s, "judge-policy" | "judge-implementation"));
+        };
         let mut fields = vec![];
         for (path, pointer, on) in patterns.iter().filter(|(p, _, _)| p == &d.path) {
             for (exists, docs) in [
@@ -63,22 +61,23 @@ fn classify_endpoints(
                 b.workflow == *path,
             )?);
         }
-        let is_product = surfaces.iter().any(|s| matches!(*s, "product" | "test"));
         let classification = json!({"path":d.path,"before_surface":old,"after_surface":new});
-        if is_product {
+        if surfaces.product {
             products.insert(d.path.clone(), classification.clone());
         }
-        if executable_rule || !fields.is_empty() {
+        if surfaces.changes_rule(!fields.is_empty()) {
             let mut rule = classification;
-            rule["whole_file"] = executable_rule.into();
+            rule["whole_file"] = surfaces.whole_rule.into();
             rule["semantic"] = fields.into();
             changes.insert(d.path.clone(), rule);
         }
     }
-    Ok(json!({"mixed":!changes.is_empty()&&!products.is_empty(),
+    Ok(
+        json!({"mixed":verified_classification::mixed(changes.len(), products.len()),
         "rule_paths":changes.keys().collect::<Vec<_>>(),"product_paths":products.keys().collect::<Vec<_>>(),
         "changes":changes.values().collect::<Vec<_>>(),"product_changes":products.values().collect::<Vec<_>>(),
-        "requires_acknowledgement":false}))
+        "requires_acknowledgement":false}),
+    )
 }
 /// Publish the classification for the same interpreted inputs used by classify-v1.
 pub fn produce(
