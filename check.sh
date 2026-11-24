@@ -16,6 +16,15 @@ coverage_failure() {
   exit 1
 }
 
+if [[ ${1:-} == --native && $# == 1 ]]; then
+  native_only=true
+elif [[ $# == 0 ]]; then
+  native_only=false
+else
+  echo 'usage: ./check.sh [--native]' >&2
+  exit 2
+fi
+
 verifier=$(command -v "${VERUS:-verus}") || coverage_failure "registered verifier was not found"
 
 prove() {
@@ -42,6 +51,10 @@ stem=${filename#lib}
 stem=${metadata%/*}/${stem%.rmeta}
 chrono-host-bootstrap check-compiler-sources native "$stem" src/verified_classification.rs src/lib.rs src/native.rs ||
   coverage_failure "native library differs from required sources"
+
+if "$native_only"; then
+  exit 0
+fi
 
 policy=crates/judge-mixed/src/verified_classification.rs
 expectations=crates/judge-mixed-tests/tests/verified_classification.rs
