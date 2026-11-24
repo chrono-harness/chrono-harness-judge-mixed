@@ -14,4 +14,4 @@
 
 ## 本仓验证
 
-产品位于 [`crates/judge-mixed`](../crates/judge-mixed)。原生测试位于 [`crates/judge-mixed-tests`](../crates/judge-mixed-tests)。在仓库根目录运行 `mise exec -- ./check.sh` 执行本仓的检查。
+产品位于 [`crates/judge-mixed`](../crates/judge-mixed)。原生测试位于 [`crates/judge-mixed-tests`](../crates/judge-mixed-tests)。在仓库根目录运行 `mise exec -- ./check.sh` 执行本仓的检查。 本仓按 Git 变更执行已登记的分类证明、独立边界预期和原生行为测试。GitHub 汇总核对同一固定候选的单元原件。
