@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+if [[ $# -eq 0 ]]; then
+  /bin/sh .chrono-harness/ci/install.sh
+  export PATH="$PWD/.chrono-harness/bin:$PATH"
+  export CHRONO_CHECK_SOURCE=${CHRONO_CHECK_SOURCE:-local}
+  exec .chrono-harness/bin/chrono-harness check
+fi
+if [[ $# -ne 1 || $1 != --native ]]; then
+  echo 'usage: ./check.sh [--native]' >&2
+  exit 2
+fi
 mkdir -p target
 scratch=$(mktemp -d "$(pwd -P)/target/check.XXXXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
@@ -16,30 +26,6 @@ coverage_failure() {
   exit 1
 }
 
-if [[ ${1:-} == --native && $# == 1 ]]; then
-  native_only=true
-elif [[ $# == 0 ]]; then
-  native_only=false
-else
-  echo 'usage: ./check.sh [--native]' >&2
-  exit 2
-fi
-
-verifier=$(command -v "${VERUS:-verus}") || coverage_failure "registered verifier was not found"
-
-prove() {
-  chrono-host-bootstrap run-compiler-proof "$scratch" "$1" "$verifier" "$2" ||
-    coverage_failure "$1: verifier failed"
-}
-
-admit_proof() {
-  local operation=$1
-  shift
-  chrono-host-bootstrap collect-compiler-proof "$scratch" "$operation" "$verifier" \
-    0.2026.04.24.f8e1704 f8e17045c4ac17a02e566b8997070f2eecc255be "$@" ||
-    coverage_failure "$operation: required proof result was not admitted"
-}
-
 # Read the exact library selected by Cargo in the build of the tested executable.
 metadata=$(jq -ers --arg manifest "$(pwd -P)/$product" '
   [.[] | select(.reason == "compiler-artifact" and .manifest_path == $manifest
@@ -51,19 +37,3 @@ stem=${filename#lib}
 stem=${metadata%/*}/${stem%.rmeta}
 chrono-host-bootstrap check-compiler-sources native "$stem" src/verified_classification.rs src/lib.rs src/native.rs ||
   coverage_failure "native library differs from required sources"
-
-if "$native_only"; then
-  exit 0
-fi
-
-policy=crates/judge-mixed/src/verified_classification.rs
-expectations=crates/judge-mixed-tests/tests/verified_classification.rs
-
-product_operation=verify.mixed-classification
-test_operation=verify.mixed-classification-tests
-
-prove "$product_operation" "$policy"
-prove "$test_operation" "$expectations"
-
-admit_proof "$product_operation" "$policy"
-admit_proof "$test_operation" "$expectations" crates/judge-mixed-tests/tests/../../judge-mixed/src/verified_classification.rs
