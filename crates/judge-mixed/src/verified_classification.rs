@@ -67,4 +67,54 @@ pub fn mixed(rule_count: usize, product_count: usize) -> (warn: bool)
     ensures warn == (rule_count > 0 && product_count > 0),
 { rule_count > 0 && product_count > 0 }
 
+pub fn cost_report_shape(schema: Option<&str>, before_object: bool, after_object: bool) -> (valid: bool)
+    ensures valid == (before_object && after_object && match schema {
+        Some(value) => value@ == "chrono-costs/v1"@, None => false,
+    }),
+{
+    match schema {
+        Some(value) => <&str>::exec_eq(value, "chrono-costs/v1") && before_object && after_object,
+        None => false,
+    }
+}
+
+pub enum CostSide { Before, After }
+
+impl CostSide {
+    pub fn field(&self) -> (name: &'static str)
+        ensures match self {
+            Self::Before => name@ == "declared_before"@,
+            Self::After => name@ == "declared_after"@,
+        },
+    { match self { Self::Before => "declared_before", Self::After => "declared_after" } }
+}
+
+/// Only look up a row when all preceding DELTA rows have both endpoint entries.
+pub fn first_missing_cost<F: Fn(usize) -> (bool, bool)>(count: usize, lookup: F)
+    -> (missing: Option<(usize, CostSide)>)
+    requires forall|i: usize| i < count ==> lookup.requires((i,)),
+    ensures match missing {
+        None => forall|i: usize| i < count ==> lookup.ensures((i,), (true, true)),
+        Some((i, side)) => i < count
+            && (forall|j: usize| j < i ==> lookup.ensures((j,), (true, true)))
+            && match side {
+                CostSide::Before => exists|after: bool| lookup.ensures((i,), (false, after)),
+                CostSide::After => lookup.ensures((i,), (true, false)),
+            },
+    },
+{
+    let mut i = 0;
+    while i < count
+        invariant i <= count, forall|j: usize| j < count ==> lookup.requires((j,)),
+            forall|j: usize| j < i ==> lookup.ensures((j,), (true, true)),
+        decreases count - i,
+    {
+        let (before, after) = lookup(i);
+        if !before { return Some((i, CostSide::Before)); }
+        if !after { return Some((i, CostSide::After)); }
+        i += 1;
+    }
+    None
+}
+
 }

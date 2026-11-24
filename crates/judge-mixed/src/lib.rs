@@ -88,20 +88,25 @@ pub fn produce(
     after: &Documents,
     costs: &Value,
 ) -> Result<Value, String> {
-    if costs["schema"] != "chrono-costs/v1"
-        || !costs["declared_before"].is_object()
-        || !costs["declared_after"].is_object()
-    {
+    let previous = &costs["declared_before"];
+    let current = &costs["declared_after"];
+    if !verified_classification::cost_report_shape(
+        costs["schema"].as_str(),
+        previous.is_object(),
+        current.is_object(),
+    ) {
         return Err("E_COST_INPUT: missing or unsupported cost report".into());
     }
     let mut output = classify_endpoints(a, b, delta, before, after)?;
-    for d in delta {
-        let node = format!("file:{}", d.path);
-        for key in ["declared_before", "declared_after"] {
-            if costs[key].get(&node).is_none() {
-                return Err(format!("E_COST_INPUT: {key} lacks changed path {node}"));
-            }
-        }
+    if let Some((index, side)) = verified_classification::first_missing_cost(delta.len(), |i| {
+        let node = format!("file:{}", delta[i].path);
+        (previous.get(&node).is_some(), current.get(&node).is_some())
+    }) {
+        return Err(format!(
+            "E_COST_INPUT: {} lacks changed path file:{}",
+            side.field(),
+            delta[index].path
+        ));
     }
     output["schema"] = MIXED_SCHEMA.into();
     Ok(output)

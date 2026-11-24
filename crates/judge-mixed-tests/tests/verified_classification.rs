@@ -48,4 +48,34 @@ fn mixed_warning_requires_both_a_rule_and_a_product() {
     expect(policy::mixed(2,3));
 }
 
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn costs_require_both_endpoint_maps_and_the_first_missing_side_in_delta_order() {
+    proof { reveal_strlit("chrono-costs/v1"); }
+    expect(policy::cost_report_shape(Some("chrono-costs/v1"), true, true));
+    expect(!policy::cost_report_shape(Some("chrono-costs/v1"), true, false));
+    expect(!policy::cost_report_shape(None, true, true));
+    let presence = |i: usize| -> (r: (bool, bool))
+        ensures r == (i != 2, i == 0),
+    { (i != 2, i == 0) };
+    expect(matches!(policy::first_missing_cost(0, presence), None));
+    expect(matches!(policy::first_missing_cost(1, presence), None));
+    let gap = policy::first_missing_cost(3, presence);
+    match gap {
+        Some((i, policy::CostSide::After)) => expect(i == 1),
+        _ => { proof {
+            assert(presence.ensures((1usize,), (true, true)) == false);
+        } expect(false); }
+    }
+    let both = |_i: usize| -> (r: (bool, bool)) ensures r == (false, false), { (false, false) };
+    let missing = policy::first_missing_cost(1, both);
+    match missing {
+        Some((i, policy::CostSide::Before)) => expect(i == 0),
+        None => { assert(!both.ensures((0usize,), (true, true))); expect(false); }
+        Some((i, policy::CostSide::After)) => {
+            assert(!both.ensures((i,), (true, false)));
+            expect(false);
+        }
+    }
+}
+
 }
