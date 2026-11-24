@@ -11,6 +11,26 @@ use vstd::vpanic as panic;
 
 verus! {
 
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn semantic_identity_precedence_and_duplicate_selections() {
+    use policy::IdentityField::{Invalid, Missing, Text};
+    use policy::RowIdentity::{Id, Path, Retirement};
+    proof { reveal_strlit(""); reveal_strlit("x"); reveal_strlit("job");
+        assert("x"@.len() > 0); assert("job"@.len() > 0); assert(""@.len() == 0); }
+    expect(matches!(policy::row_identity(Text("x"),Invalid,Missing,false),Ok(Id(_))));
+    expect(matches!(policy::row_identity(Missing,Text("x"),Missing,false),Ok(Path(_))));
+    expect(matches!(policy::row_identity(Text("x"),Missing,Text("job"),true),Ok(Retirement(_,_))));
+    expect(matches!(policy::row_identity(Invalid,Text("x"),Text("job"),false),Err(_)));
+    expect(matches!(policy::row_identity(Missing,Text("x"),Missing,true),Err(_)));
+    expect(matches!(policy::row_identity(Missing,Text("x"),Text("job"),true),Err(_)));
+    let mut rows=std::collections::BTreeSet::<u64>::new();
+    expect(policy::new_row(&mut rows,4));
+    expect(!policy::new_row(&mut rows,4));
+    let mut selections=std::collections::BTreeMap::<u64,u64>::new();
+    expect(policy::record_selection(&mut selections,4,1).is_ok());
+    expect(policy::record_selection(&mut selections,4,2).is_err());
+}
+
 fn expect(value: bool) requires value {
     if !value { panic!(); }
 }

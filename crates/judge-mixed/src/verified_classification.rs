@@ -1,5 +1,6 @@
 //! Classification of one changed path from its two registered endpoint surfaces.
 #![allow(unexpected_cfgs)]
+use std::collections::{BTreeMap, BTreeSet};
 use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
@@ -7,6 +8,69 @@ use vstd::prelude::verus;
 use vstd::prelude::*;
 
 verus! {
+
+/// A present non-string and a missing key have different precedence in JSON rows.
+pub enum IdentityField<'a> { Missing, Invalid, Text(&'a str) }
+
+pub enum RowIdentity<'a> { Id(&'a str), Path(&'a str), Retirement(&'a str, &'a str) }
+
+pub open spec fn nonempty(field: IdentityField) -> Option<Seq<char>> {
+    match field { IdentityField::Text(s) if s@ != ""@ => Some(s@), _ => None }
+}
+
+pub fn retirement_rows(workflow: bool, pointer: &str) -> (typed: bool)
+    ensures typed == (workflow && pointer@ == "/retirements"@),
+{
+    workflow && <&str>::exec_eq(pointer, "/retirements")
+}
+
+/// Ordinary rows prefer a present id. Workflow retirements also require a kind.
+pub fn row_identity<'a>(id: IdentityField<'a>, path: IdentityField<'a>, kind: IdentityField<'a>, retirement: bool)
+    -> (result: Result<RowIdentity<'a>, &'static str>)
+    ensures ({
+        let has_id = !(id is Missing);
+        let value = if has_id { nonempty(id) } else { nonempty(path) };
+        match result {
+            Ok(RowIdentity::Id(s)) => !retirement && has_id && value == Some(s@),
+            Ok(RowIdentity::Path(s)) => !retirement && !has_id && value == Some(s@),
+            Ok(RowIdentity::Retirement(k,s)) => retirement && has_id && nonempty(kind) == Some(k@) && value == Some(s@),
+            Err(e) => if value.is_none() { e@ == "E_SEMANTIC_IDENTITY: mixed or invalid path/id rows"@ }
+                else if retirement && nonempty(kind).is_none() { e@ == "E_SEMANTIC_IDENTITY: invalid retirement kind"@ }
+                else { retirement && !has_id && e@ == "E_SEMANTIC_IDENTITY: retirement requires id"@ },
+        }
+    }),
+{
+    let has_id = !matches!(id, IdentityField::Missing);
+    let value = match if has_id { id } else { path } {
+        IdentityField::Text(s) if !<&str>::exec_eq(s,"") => s,
+        _ => return Err("E_SEMANTIC_IDENTITY: mixed or invalid path/id rows"),
+    };
+    if retirement {
+        let k = match kind {
+            IdentityField::Text(s) if !<&str>::exec_eq(s,"") => s,
+            _ => return Err("E_SEMANTIC_IDENTITY: invalid retirement kind"),
+        };
+        if !has_id { return Err("E_SEMANTIC_IDENTITY: retirement requires id"); }
+        Ok(RowIdentity::Retirement(k,value))
+    } else if has_id { Ok(RowIdentity::Id(value)) } else { Ok(RowIdentity::Path(value)) }
+}
+
+pub fn new_row<K: Ord>(seen: &mut BTreeSet<K>, id: K) -> (fresh: bool)
+    requires vstd::laws_cmp::obeys_cmp::<K>(),
+    ensures fresh == !old(seen)@.contains(id), seen@ == old(seen)@.insert(id),
+{ seen.insert(id) }
+
+pub fn record_selection<K: Ord,V>(entries: &mut BTreeMap<K,V>, id: K, value: V)
+    -> (result: Result<(), &'static str>)
+    requires vstd::laws_cmp::obeys_cmp::<K>(),
+    ensures entries@ == old(entries)@.insert(id,value),
+        match result {
+            Ok(()) => !old(entries)@.contains_key(id),
+            Err(e) => old(entries)@.contains_key(id) && e@ == "E_SEMANTIC_IDENTITY: ambiguous selection"@,
+        },
+{
+    if entries.insert(id,value).is_some() { Err("E_SEMANTIC_IDENTITY: ambiguous selection") } else { Ok(()) }
+}
 
 pub struct Surfaces {
     pub whole_rule: bool,

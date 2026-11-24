@@ -1,4 +1,7 @@
 //! Stable row identities are separate from physical JSON pointers.
+use crate::verified_classification::{
+    IdentityField, RowIdentity, new_row, record_selection, retirement_rows, row_identity,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 fn escape(s: &str) -> String {
@@ -29,6 +32,14 @@ fn tokens(pointer: &str) -> Result<Vec<String>, String> {
         })
         .collect()
 }
+fn field<'a>(row: &'a Value, name: &str) -> IdentityField<'a> {
+    match row.get(name) {
+        None => IdentityField::Missing,
+        Some(Value::String(s)) => IdentityField::Text(s),
+        Some(_) => IdentityField::Invalid,
+    }
+}
+
 fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<String>>, String> {
     if !rows
         .iter()
@@ -39,30 +50,17 @@ fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<Stri
     let mut seen = BTreeSet::new();
     let mut ids = vec![];
     for row in rows {
-        let key = if row.get("id").is_some() {
-            "id"
-        } else {
-            "path"
+        let id = match row_identity(
+            field(row, "id"),
+            field(row, "path"),
+            field(row, "kind"),
+            workflow_retirements,
+        )? {
+            RowIdentity::Id(value) => format!("id:{value}"),
+            RowIdentity::Path(value) => format!("path:{value}"),
+            RowIdentity::Retirement(kind, value) => format!("retirement:{}", json!([kind, value])),
         };
-        let value = row[key]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("E_SEMANTIC_IDENTITY: mixed or invalid path/id rows")?;
-        // The workflow contract identifies retirements by (kind, id). Other
-        // collections retain their original id/path uniqueness contract.
-        let id = if workflow_retirements {
-            let kind = row["kind"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .ok_or("E_SEMANTIC_IDENTITY: invalid retirement kind")?;
-            if key != "id" {
-                return Err("E_SEMANTIC_IDENTITY: retirement requires id".into());
-            }
-            format!("retirement:{}", json!([kind, value]))
-        } else {
-            format!("{key}:{value}")
-        };
-        if !seen.insert(id.clone()) {
+        if !new_row(&mut seen, id.clone()) {
             return Err(format!("E_SEMANTIC_IDENTITY: duplicate {id}"));
         }
         ids.push(id);
@@ -88,7 +86,7 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
                 .map(|(i, v)| normalized(v, &format!("{pointer}/{i}"), workflow))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(
-                if let Some(ids) = row_ids(rows, workflow && pointer == "/retirements")? {
+                if let Some(ids) = row_ids(rows, retirement_rows(workflow, pointer))? {
                     json!([
                         "rows",
                         ids.into_iter().zip(values).collect::<BTreeMap<_, _>>()
@@ -121,10 +119,7 @@ fn select(
             pointer,
             value: value.clone(),
         };
-        if out.insert(identity, entry).is_some() {
-            return Err("E_SEMANTIC_IDENTITY: ambiguous selection".into());
-        }
-        return Ok(());
+        return record_selection(out, identity, entry).map_err(String::from);
     }
     let token = &rest[0];
     match value {
@@ -145,7 +140,7 @@ fn select(
             }
         }
         Value::Array(rows) => {
-            let ids = row_ids(rows, workflow && pointer == "/retirements")?;
+            let ids = row_ids(rows, retirement_rows(workflow, &pointer))?;
             for (i, child) in rows.iter().enumerate() {
                 if token == "*" || token == &i.to_string() {
                     let mut next = identity.clone();

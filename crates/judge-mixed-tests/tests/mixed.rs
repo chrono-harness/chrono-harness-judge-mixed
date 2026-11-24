@@ -348,6 +348,32 @@ fn workflow_retirements_use_typed_identity_without_losing_either_obligation() {
 }
 
 #[test]
+fn retirement_key_errors_preserve_the_first_diagnostic() {
+    let mut base = fixture();
+    base.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([
+        {"path":WORKFLOW,"pointers":["/retirements"],"on":"add-modify-delete"}
+    ]);
+    for (row, diagnostic) in [
+        (
+            json!({"id":null,"path":"fallback","kind":"test"}),
+            "mixed or invalid path/id rows",
+        ),
+        (
+            json!({"id":"","kind":null}),
+            "mixed or invalid path/id rows",
+        ),
+        (json!({"path":"x","kind":""}), "invalid retirement kind"),
+        (json!({"path":"x","kind":"test"}), "retirement requires id"),
+    ] {
+        base.get_mut(WORKFLOW).unwrap()["retirements"] = json!([row]);
+        assert_eq!(
+            report(&base, &base, &[WORKFLOW]).unwrap_err(),
+            format!("E_SEMANTIC_IDENTITY: {diagnostic}")
+        );
+    }
+}
+
+#[test]
 fn kind_fields_do_not_weaken_id_uniqueness_outside_workflow_retirements() {
     let mut a = fixture();
     a.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([
