@@ -117,6 +117,20 @@ pub fn row_identity<'a>(id: IdentityField<'a>, path: IdentityField<'a>, kind: Id
     } else if has_id { Ok(RowIdentity::Id(value)) } else { Ok(RowIdentity::Path(value)) }
 }
 
+/// Compare a field at the same stable identity in the two documents.
+/// An absent field differs from a present field holding JSON null.
+pub fn field_changed(
+    mode: &str, before: bool, after: bool, equal_values: bool,
+) -> (changed: bool)
+    ensures changed == (
+        (before || mode@ != "modify-delete-existing"@)
+        && (before != after || (before && after && !equal_values))
+    ),
+{
+    if !before { return after && !<&str>::exec_eq(mode, "modify-delete-existing"); }
+    !after || !equal_values
+}
+
 /// A rule on either endpoint names a document only when it selects a field.
 pub fn register_document<K: Ord>(named: &mut BTreeSet<K>, path: K, pointers: usize)
     requires vstd::laws_cmp::obeys_cmp::<K>(),
