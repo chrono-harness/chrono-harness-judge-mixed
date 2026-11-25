@@ -186,8 +186,14 @@ pub fn changes(
     for key in keys {
         let a = old.get(key);
         let b = new.get(key);
-        let equal_values = matches!((a, b), (Some(old), Some(new)) if old.normalized == new.normalized);
-        if !crate::verified_classification::field_changed(on, a.is_some(), b.is_some(), equal_values) {
+        let equal_values =
+            matches!((a, b), (Some(old), Some(new)) if old.normalized == new.normalized);
+        if !crate::verified_classification::field_changed(
+            on,
+            a.is_some(),
+            b.is_some(),
+            equal_values,
+        ) {
             continue;
         }
         let encode = |s: &Selection| json!({"pointer":s.pointer,"value":s.value});
