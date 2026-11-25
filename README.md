@@ -2,7 +2,13 @@
 
 识别规则和产品的混合变更。
 
-运行 `./check.sh` 验证独立组件。
+在任务工作树中运行 `./check.sh`。检查汇总读取本轮原件，Verus 的编译库和 dep-info 在成功核验后立即释放。需要长期保存的报告请在 24 小时内转存到工作树之外。
+
+主检出负责登记和回收任务工作树。安装所选工具后，开发机可将下列条目加入用户 crontab，替换为本机主检出和 mise 的绝对路径。每小时的维护会检查实际租约、源码与提交的保全状况，回收到期工作树及其中的 `.chrono-harness/state/`、工具链接与构建目录。
+
+```cron
+0 * * * * cd '/absolute/path/to/chrono-harness-judge-mixed' && '/absolute/path/to/mise' exec -- chrono-worktree maintain --host-root . --config .chrono-harness/worktree.json >/dev/null
+```
 
 [固定来源](https://github.com/ChronoAIProject/chrono-harness/tree/5f6892dfa2f73675a84e4ebdc3b06eb83b824d6e/crates/judge-mixed)
 

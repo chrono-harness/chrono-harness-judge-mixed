@@ -26,10 +26,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.mixed-classification.rlib,dep-info=.chrono-harness/state/verify.mixed-classification.rlib.d",
+            "--emit=link={operation_state}/verify.mixed-classification.rlib,dep-info={operation_state}/verify.mixed-classification.rlib.d",
             "crates/judge-mixed/src/verified_classification.rs",
             "-o",
-            ".chrono-harness/state/verify.mixed-classification.rlib",
+            "{operation_state}/verify.mixed-classification.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
@@ -59,10 +59,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.mixed-classification-tests.rlib,dep-info=.chrono-harness/state/verify.mixed-classification-tests.rlib.d",
+            "--emit=link={operation_state}/verify.mixed-classification-tests.rlib,dep-info={operation_state}/verify.mixed-classification-tests.rlib.d",
             "crates/judge-mixed-tests/tests/verified_classification.rs",
             "-o",
-            ".chrono-harness/state/verify.mixed-classification-tests.rlib",
+            "{operation_state}/verify.mixed-classification-tests.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
