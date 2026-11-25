@@ -13,6 +13,27 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn semantic_change_modes_compare_existing_fields_and_distinguish_additions() {
+    let all = "add-modify-delete";
+    let existing = "modify-delete-existing";
+    proof {
+        reveal_strlit("add-modify-delete");
+        reveal_strlit("modify-delete-existing");
+        assert("add-modify-delete"@.len() != "modify-delete-existing"@.len());
+    }
+    expect(policy::field_changed(all, false, true, true));
+    expect(!policy::field_changed(existing, false, true, false));
+    expect(policy::field_changed(existing, true, true, false));
+    expect(policy::field_changed(all, true, true, false));
+    expect(!policy::field_changed(all, true, true, true));
+    expect(!policy::field_changed(existing, true, true, true));
+    expect(policy::field_changed(all, true, false, true));
+    expect(policy::field_changed(existing, true, false, false));
+    expect(!policy::field_changed(existing, false, false, false));
+    expect(!policy::field_changed(all, false, false, false));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn document_fields_and_blob_sides_determine_exact_distinct_paths() {
     let mut named = std::collections::BTreeSet::<u64>::new();
     let mut before = std::collections::BTreeSet::new();
