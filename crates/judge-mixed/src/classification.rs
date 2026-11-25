@@ -80,29 +80,39 @@ struct DocumentSelection {
     delta: Vec<Delta>,
 }
 
-fn required_paths(base: &[Rule], candidate: &[Rule], delta: &[Delta]) -> [BTreeSet<String>; 2] {
-    let named: BTreeSet<_> = base
-        .iter()
-        .chain(candidate)
-        .filter(|rule| !rule.pointers.is_empty())
-        .map(|rule| rule.path.as_str())
-        .collect();
-    let mut selected = [BTreeSet::new(), BTreeSet::new()];
-    for change in delta
-        .iter()
-        .filter(|change| named.contains(change.path.as_str()))
-    {
-        if change.old_blob.is_some() {
-            selected[0].insert(change.path.clone());
-        }
-        if change.new_blob.is_some() {
-            selected[1].insert(change.path.clone());
-        }
+fn required_paths<'a>(
+    base: &'a [Rule],
+    candidate: &'a [Rule],
+    delta: &'a [Delta],
+) -> [BTreeSet<&'a str>; 2] {
+    let mut named = BTreeSet::new();
+    for rule in base.iter().chain(candidate) {
+        crate::verified_classification::register_document(
+            &mut named,
+            rule.path.as_str(),
+            rule.pointers.len(),
+        );
     }
-    selected
+    let mut before = BTreeSet::new();
+    let mut after = BTreeSet::new();
+    for change in delta {
+        crate::verified_classification::select_document(
+            &named,
+            &mut before,
+            &mut after,
+            change.path.as_str(),
+            change.old_blob.is_some(),
+            change.new_blob.is_some(),
+        );
+    }
+    [before, after]
 }
 
-pub(super) fn endpoint_paths(a: &Endpoint, b: &Endpoint, delta: &[Delta]) -> [BTreeSet<String>; 2] {
+pub(super) fn endpoint_paths<'a>(
+    a: &'a Endpoint,
+    b: &'a Endpoint,
+    delta: &'a [Delta],
+) -> [BTreeSet<&'a str>; 2] {
     required_paths(&a.semantic_fields, &b.semantic_fields, delta)
 }
 

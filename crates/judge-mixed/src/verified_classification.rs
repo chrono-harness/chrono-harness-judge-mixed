@@ -117,6 +117,36 @@ pub fn row_identity<'a>(id: IdentityField<'a>, path: IdentityField<'a>, kind: Id
     } else if has_id { Ok(RowIdentity::Id(value)) } else { Ok(RowIdentity::Path(value)) }
 }
 
+/// A rule on either endpoint names a document only when it selects a field.
+pub fn register_document<K: Ord>(named: &mut BTreeSet<K>, path: K, pointers: usize)
+    requires vstd::laws_cmp::obeys_cmp::<K>(),
+    ensures named@ == if pointers > 0 { old(named)@.insert(path) } else { old(named)@ },
+{
+    if pointers != 0 {
+        named.insert(path);
+    }
+}
+
+/// Accumulate exactly the existing endpoints of a named changed document.
+pub fn select_document<K: Ord + Copy>(
+    named: &BTreeSet<K>, before: &mut BTreeSet<K>, after: &mut BTreeSet<K>,
+    path: K, old_blob: bool, new_blob: bool,
+)
+    requires vstd::laws_cmp::obeys_cmp::<K>(),
+    ensures
+        before@ == if named@.contains(path) && old_blob {
+            old(before)@.insert(path)
+        } else { old(before)@ },
+        after@ == if named@.contains(path) && new_blob {
+            old(after)@.insert(path)
+        } else { old(after)@ },
+{
+    if named.contains(&path) {
+        if old_blob { before.insert(path); }
+        if new_blob { after.insert(path); }
+    }
+}
+
 pub fn new_row<K: Ord>(seen: &mut BTreeSet<K>, id: K) -> (fresh: bool)
     requires vstd::laws_cmp::obeys_cmp::<K>(),
     ensures fresh == !old(seen)@.contains(id), seen@ == old(seen)@.insert(id),
