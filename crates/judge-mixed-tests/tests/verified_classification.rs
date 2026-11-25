@@ -13,6 +13,28 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn document_fields_and_blob_sides_determine_exact_distinct_paths() {
+    let mut named = std::collections::BTreeSet::<u64>::new();
+    let mut before = std::collections::BTreeSet::new();
+    let mut after = std::collections::BTreeSet::new();
+    policy::register_document(&mut named, 9, 0);
+    policy::register_document(&mut named, 1, 1);
+    policy::register_document(&mut named, 1, 0);
+    policy::register_document(&mut named, 1, 2);
+    policy::register_document(&mut named, 2, 1);
+    policy::register_document(&mut named, 3, 1);
+    policy::register_document(&mut named, 4, 1);
+    policy::select_document(&named, &mut before, &mut after, 1, true, false);
+    policy::select_document(&named, &mut before, &mut after, 2, false, true);
+    policy::select_document(&named, &mut before, &mut after, 3, true, true);
+    policy::select_document(&named, &mut before, &mut after, 3, true, true);
+    policy::select_document(&named, &mut before, &mut after, 4, false, false);
+    policy::select_document(&named, &mut before, &mut after, 9, true, true);
+    expect(before.len() == 2 && before.contains(&1) && before.contains(&3));
+    expect(after.len() == 2 && after.contains(&2) && after.contains(&3));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn agreement_requires_a_predecessor_and_every_comparison() {
     let agrees = |_i: usize| -> (b: bool) ensures b, { true };
     let except_second = |i: usize| -> (b: bool) ensures b == (i != 1), { i != 1 };
