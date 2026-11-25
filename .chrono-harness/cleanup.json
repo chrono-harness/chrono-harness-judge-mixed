@@ -13,10 +13,6 @@
   },
   "artifacts": [
     {
-      "path": ".chrono-harness/state/",
-      "disposition": "finish-dispose"
-    },
-    {
       "path": ".chrono-harness/bin/",
       "disposition": "finish-dispose"
     },
@@ -27,6 +23,30 @@
     {
       "path": ".chrono-harness/native-check/",
       "disposition": "dispose"
+    },
+    {
+      "path": ".chrono-harness/state/preparation/",
+      "disposition": "dispose"
+    },
+    {
+      "path": ".chrono-harness/state/collection/",
+      "disposition": "dispose"
+    },
+    {
+      "path": ".chrono-harness/state/mixed/",
+      "disposition": "dispose"
+    },
+    {
+      "path": ".chrono-harness/state/worktrees/",
+      "disposition": "finish-dispose"
+    },
+    {
+      "path": ".chrono-harness/state/origins/",
+      "disposition": "finish-dispose"
+    },
+    {
+      "path": ".chrono-harness/state/local/",
+      "disposition": "finish-dispose"
     }
   ],
   "terminal_history": {
