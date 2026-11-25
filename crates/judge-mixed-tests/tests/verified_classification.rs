@@ -2,6 +2,7 @@
 #![allow(unexpected_cfgs)]
 #[path = "../../judge-mixed/src/verified_classification.rs"]
 mod policy;
+use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
@@ -10,6 +11,55 @@ use vstd::prelude::*;
 use vstd::vpanic as panic;
 
 verus! {
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn agreement_requires_a_predecessor_and_every_comparison() {
+    let agrees = |_i: usize| -> (b: bool) ensures b, { true };
+    let except_second = |i: usize| -> (b: bool) ensures b == (i != 1), { i != 1 };
+    expect(!policy::matching_predecessors(0, agrees));
+    expect(policy::matching_predecessors(2, agrees));
+    expect(policy::matching_predecessors(1, except_second));
+    let bad = policy::matching_predecessors(2, except_second);
+    proof {
+        if bad { assert(except_second.ensures((1usize,), true)); }
+    }
+    expect(!bad);
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn plan_admits_the_first_cost_only_after_impact_delta_costs_and_binding_agree() {
+    let yes = || -> (b: bool) ensures b, { true };
+    let no = || -> (b: bool) ensures !b, { false };
+    let equal = |_i: usize| -> (b: bool) ensures b, { true };
+    let disagree = |_i: usize| -> (b: bool) ensures !b, { false };
+    let empty: [u8; 0] = [];
+    let costs = [19u8, 19u8];
+
+    match policy::plan_predecessors(0, equal, yes, &empty, equal, no) {
+        Err(e) => expect(<&str>::exec_eq(e, "E_IMPACT: missing or conflicting bound FILEMAP output")),
+        Ok(_) => expect(false),
+    }
+    match policy::plan_predecessors(1, equal, no, &empty, equal, no) {
+        Err(e) => expect(<&str>::exec_eq(e, "E_IMPACT: missing or conflicting bound FILEMAP output")),
+        Ok(_) => expect(false),
+    }
+    match policy::plan_predecessors(1, equal, yes, &empty, equal, no) {
+        Err(e) => expect(<&str>::exec_eq(e, "E_COST_INPUT: missing predecessor costs")),
+        Ok(_) => expect(false),
+    }
+    match policy::plan_predecessors(1, equal, yes, &costs, disagree, yes) {
+        Err(e) => expect(<&str>::exec_eq(e, "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding")),
+        Ok(_) => { assert(!disagree.ensures((0usize,),true)); expect(false); }
+    }
+    match policy::plan_predecessors(1, equal, yes, &costs, equal, no) {
+        Err(e) => expect(<&str>::exec_eq(e, "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding")),
+        Ok(_) => expect(false),
+    }
+    match policy::plan_predecessors(2, equal, yes, &costs, equal, yes) {
+        Ok(first) => expect(*first == 19),
+        Err(_) => expect(false),
+    }
+}
 
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn semantic_identity_precedence_and_duplicate_selections() {
