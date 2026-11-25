@@ -254,7 +254,7 @@ pub fn report_finding<'a, T>(rules: &'a [T], products: &'a [T])
         },
 {
     if !mixed(rules.len(), products.len()) { return ("pass", None); }
-    let mut refs = Vec::new();
+    let mut refs: Vec<&'a T> = Vec::new();
     let mut i = 0;
     while i < rules.len()
         invariant
