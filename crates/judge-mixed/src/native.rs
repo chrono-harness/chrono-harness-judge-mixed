@@ -76,7 +76,5 @@ pub fn report(input: impl Read) -> Result<Value, String> {
             output["rule_paths"], output["product_paths"]
         ),"delta_refs":references,"causes":["/outputs/rule_changes"]}));
     }
-    Ok(
-        json!({"status":status,"findings":findings,"outputs":{"rule_changes":output}}),
-    )
+    Ok(json!({"status":status,"findings":findings,"outputs":{"rule_changes":output}}))
 }
