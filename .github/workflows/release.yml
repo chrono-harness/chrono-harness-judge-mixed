@@ -47,7 +47,8 @@ jobs:
           set -euo pipefail
           cargo build --release --locked --manifest-path crates/judge-mixed/Cargo.toml
           binary="$CARGO_TARGET_DIR/release/chrono-judge-mixed"
-          env PATH= "$binary" --version | grep -Ex 'chrono-judge-mixed [0-9]+[.][0-9]+[.][0-9]+'
+          tag_version=${GITHUB_REF_NAME#v}
+          env PATH= "$binary" --version | grep -Fx "chrono-judge-mixed ${tag_version%%-*}"
           query='{"base":{"workflow":"w","surfaces":{},"semantic_fields":[]},"candidate":{"workflow":"w","surfaces":{},"semantic_fields":[]},"delta":[],"before":{},"after":{}}'
           env PATH= "$binary" classify-v1 <<< "$query" | jq -e '.mixed == false and .rule_paths == [] and .product_paths == []'
           env PATH= "$binary" document-paths-v1 <<< '{"base":[],"candidate":[],"delta":[]}' | jq -e '. == {"base":[],"candidate":[]}'
