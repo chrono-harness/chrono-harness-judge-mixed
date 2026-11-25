@@ -237,6 +237,48 @@ pub fn mixed(rule_count: usize, product_count: usize) -> (warn: bool)
     ensures warn == (rule_count > 0 && product_count > 0),
 { rule_count > 0 && product_count > 0 }
 
+/// Serialize a warning only for a mixed DELTA. References retain their two
+/// published path orders, including a path classified on both sides.
+pub fn report_finding<'a, T>(rules: &'a [T], products: &'a [T])
+    -> (out: (&'static str, Option<Vec<&'a T>>))
+    ensures
+        (out.1 is Some) == (rules.len() > 0 && products.len() > 0),
+        match out.1 {
+            None => out.0@ == "pass"@,
+            Some(refs) => {
+                &&& out.0@ == "warn"@
+                &&& refs.len() == rules.len() + products.len()
+                &&& forall|i:int| 0 <= i < rules.len() ==> *(#[trigger] refs[i]) == rules[i]
+                &&& forall|i:int| 0 <= i < products.len() ==> *(#[trigger] refs[rules.len()+i]) == products[i]
+            },
+        },
+{
+    if !mixed(rules.len(), products.len()) { return ("pass", None); }
+    let mut refs: Vec<&'a T> = Vec::new();
+    let mut i = 0;
+    while i < rules.len()
+        invariant
+            i <= rules.len(), refs.len() == i,
+            forall|j:int| 0 <= j < i ==> *(#[trigger] refs[j]) == rules[j],
+        decreases rules.len() - i,
+    {
+        refs.push(&rules[i]);
+        i += 1;
+    }
+    let mut i = 0;
+    while i < products.len()
+        invariant
+            i <= products.len(), refs.len() == rules.len() + i,
+            forall|j:int| 0 <= j < rules.len() ==> *(#[trigger] refs[j]) == rules[j],
+            forall|j:int| 0 <= j < i ==> *(#[trigger] refs[rules.len()+j]) == products[j],
+        decreases products.len() - i,
+    {
+        refs.push(&products[i]);
+        i += 1;
+    }
+    ("warn", Some(refs))
+}
+
 pub fn cost_report_shape(schema: Option<&str>, before_object: bool, after_object: bool) -> (valid: bool)
     ensures valid == (before_object && after_object && match schema {
         Some(value) => value@ == "chrono-costs/v1"@, None => false,
