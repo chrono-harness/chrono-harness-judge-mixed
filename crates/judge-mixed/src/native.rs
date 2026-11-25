@@ -25,21 +25,14 @@ pub fn plan(input: impl Read) -> Result<Value, String> {
     }
     let delta: Vec<Delta> =
         serde_json::from_value(q.impact["delta"].clone()).map_err(|e| format!("E_IMPACT: {e}"))?;
-    if q.prior_impacts.is_empty()
-        || q.prior_impacts.iter().any(|impact| *impact != q.impact)
-        || delta != q.delta
-    {
-        return Err("E_IMPACT: missing or conflicting bound FILEMAP output".into());
-    }
-    let costs = q
-        .prior_costs
-        .first()
-        .ok_or("E_COST_INPUT: missing predecessor costs")?;
-    if q.prior_costs.iter().any(|other| other != costs) || costs["binding"] != q.binding {
-        return Err(
-            "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding".into(),
-        );
-    }
+    let costs = crate::verified_classification::plan_predecessors(
+        q.prior_impacts.len(),
+        |i| q.prior_impacts[i] == q.impact,
+        || delta == q.delta,
+        &q.prior_costs,
+        |i| q.prior_costs[i] == q.prior_costs[0],
+        || q.prior_costs[0]["binding"] == q.binding,
+    )?;
     let [base, candidate] = classification::endpoint_paths(&q.base, &q.candidate, &q.delta);
     Ok(json!({"base":base,"candidate":candidate,"context":{"binding":q.binding,"costs":costs}}))
 }

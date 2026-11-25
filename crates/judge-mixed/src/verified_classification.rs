@@ -9,6 +9,68 @@ use vstd::prelude::*;
 
 verus! {
 
+/// A binding needs at least one producer. Stop at the first different result.
+pub fn matching_predecessors<F: Fn(usize) -> bool>(count: usize, agrees: F) -> (ok: bool)
+    requires forall|i: usize| i < count ==> agrees.requires((i,)),
+    ensures
+        ok ==> count > 0 && forall|i: usize| i < count ==> agrees.ensures((i,), true),
+        !ok ==> count == 0 || exists|i: usize| i < count && agrees.ensures((i,), false),
+{
+    if count == 0 { return false; }
+    let mut i = 0;
+    while i < count
+        invariant i <= count,
+            forall|j: usize| j < count ==> agrees.requires((j,)),
+            forall|j: usize| j < i ==> agrees.ensures((j,), true),
+        decreases count - i,
+    {
+        if !agrees(i) { return false; }
+        i += 1;
+    }
+    true
+}
+
+/// The first admitted cost is the exact borrowed predecessor passed into the report.
+pub fn plan_predecessors<'a, T, I, D, C, B>(
+    impact_count: usize, impact_matches: I, delta_matches: D,
+    costs: &'a [T], cost_matches: C, binding_matches: B,
+) -> (result: Result<&'a T, &'static str>)
+    where I: Fn(usize) -> bool, D: Fn() -> bool, C: Fn(usize) -> bool, B: Fn() -> bool,
+    requires
+        forall|i: usize| i < impact_count ==> impact_matches.requires((i,)),
+        forall|i: usize| i < costs.len() ==> cost_matches.requires((i,)),
+        delta_matches.requires(()), costs.len() > 0 ==> binding_matches.requires(()),
+    ensures match result {
+        Ok(value) => {
+            &&& impact_count > 0 && costs.len() > 0 && *value == costs@[0]
+            &&& delta_matches.ensures((),true) && binding_matches.ensures((),true)
+            &&& forall|i:usize| i < impact_count ==> impact_matches.ensures((i,),true)
+            &&& forall|i:usize| i < costs.len() ==> cost_matches.ensures((i,),true)
+        }
+        Err(e) => ({
+            &&& e@ == "E_IMPACT: missing or conflicting bound FILEMAP output"@
+            &&& impact_count == 0 || delta_matches.ensures((), false)
+                || exists|i:usize| i < impact_count && impact_matches.ensures((i,),false)
+        } || {
+            &&& impact_count > 0 && delta_matches.ensures((), true)
+            &&& forall|i:usize| i < impact_count ==> impact_matches.ensures((i,),true)
+            &&& if costs.len() == 0 { e@ == "E_COST_INPUT: missing predecessor costs"@ }
+                else { e@ == "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding"@
+                    && (binding_matches.ensures((),false)
+                        || exists|i:usize| i < costs.len() && cost_matches.ensures((i,),false)) }
+        }),
+    },
+{
+    if !matching_predecessors(impact_count, impact_matches) || !delta_matches() {
+        return Err("E_IMPACT: missing or conflicting bound FILEMAP output");
+    }
+    if costs.len() == 0 { return Err("E_COST_INPUT: missing predecessor costs"); }
+    if !matching_predecessors(costs.len(), cost_matches) || !binding_matches() {
+        return Err("E_COST_INPUT: conflicting costs or mismatched endpoint/context binding");
+    }
+    Ok(&costs[0])
+}
+
 /// A present non-string and a missing key have different precedence in JSON rows.
 pub enum IdentityField<'a> { Missing, Invalid, Text(&'a str) }
 

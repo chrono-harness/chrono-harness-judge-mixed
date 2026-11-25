@@ -574,6 +574,24 @@ fn native_plan_requires_matching_predecessors_before_selecting_documents() {
         plan(&q).unwrap(),
         json!({"base":[PROJECTS],"candidate":[PROJECTS],"context":{"binding":binding,"costs":costs}})
     );
+    let mut duplicates = q.clone();
+    duplicates["prior_impacts"] = json!([impact, impact]);
+    duplicates["prior_costs"] = json!([costs, costs]);
+    assert_eq!(plan(&duplicates).unwrap(), plan(&q).unwrap());
+
+    let mut conflicting = duplicates.clone();
+    conflicting["prior_impacts"][1]["extra"] = json!(true);
+    conflicting["prior_costs"] = json!([]);
+    assert_eq!(
+        plan(&conflicting).unwrap_err(),
+        "E_IMPACT: missing or conflicting bound FILEMAP output"
+    );
+    conflicting = duplicates.clone();
+    conflicting["prior_costs"][1]["extra"] = json!(true);
+    assert_eq!(
+        plan(&conflicting).unwrap_err(),
+        "E_COST_INPUT: conflicting costs or mismatched endpoint/context binding"
+    );
     for (field, value, error) in [
         ("prior_impacts", json!([]), "E_IMPACT"),
         ("prior_costs", json!([]), "E_COST_INPUT"),
