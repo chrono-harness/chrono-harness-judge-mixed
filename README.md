@@ -10,6 +10,8 @@
 0 * * * * cd '/absolute/path/to/chrono-harness-judge-mixed' && '/absolute/path/to/mise' exec -- chrono-worktree maintain --host-root . --config .chrono-harness/worktree.json >/dev/null
 ```
 
+长期主检出的原生编译使用专属的 `.chrono-harness/native-check/`。整次标准检查持有工作树租约。同一项每小时维护在取得排他租约后批量回收已登记的临时目录，包括检查中断后遗留的 Cargo 文件。需要跨期使用的报告应在下一次维护前转存。外置 `CARGO_TARGET_DIR` 由调用方维护。迁移前遗留的 `target/check.*` 需先确认所有者和使用情况，再转存或移除。
+
 [固定来源](https://github.com/ChronoAIProject/chrono-harness/tree/5f6892dfa2f73675a84e4ebdc3b06eb83b824d6e/crates/judge-mixed)
 
 供 FILEMAP 使用的 `chrono-judge-mixed classify-v1` 从 stdin 读取 JSON。调用者给出 `base`、`candidate`、`delta`、`before` 和 `after`。两个端点分别包含工作流路径 `workflow`、本次各路径的 `surfaces` 映射及配置中的 `semantic_fields`。后两个对象按路径提供已声明语义字段所需的 JSON。调用者负责从固定端点取得这些数据。命令复用本仓判官的分类，成功向 stdout 返回规则路径、产品路径和具体变化，退出 0；输入无效时向 stderr 写出原因，退出 2。

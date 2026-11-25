@@ -23,6 +23,10 @@
     {
       "path": "target/",
       "disposition": "finish-dispose"
+    },
+    {
+      "path": ".chrono-harness/native-check/",
+      "disposition": "dispose"
     }
   ],
   "terminal_history": {
@@ -34,5 +38,6 @@
     "keep_seconds": 86400,
     "max_entries": 32,
     "max_bytes": 4194304
-  }
+  },
+  "main_cache_only": true
 }

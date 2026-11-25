@@ -204,6 +204,12 @@
       "owner": "host",
       "kind": "build",
       "tracked": false
+    },
+    {
+      "path": ".chrono-harness/native-check/",
+      "owner": "host",
+      "kind": "build",
+      "tracked": false
     }
   ]
 }
