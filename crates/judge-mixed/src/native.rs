@@ -67,15 +67,16 @@ pub fn report(input: impl Read) -> Result<Value, String> {
     )?;
     output["binding"] = q.context.binding;
     let mut findings = vec![];
-    if output["mixed"] == true {
-        let rules = output["rule_paths"].as_array().unwrap();
-        let products = output["product_paths"].as_array().unwrap();
+    let rules = output["rule_paths"].as_array().unwrap();
+    let products = output["product_paths"].as_array().unwrap();
+    let (status, references) = crate::verified_classification::report_finding(rules, products);
+    if let Some(references) = references {
         findings.push(json!({"code":q.warning_code,"level":"warning","message":format!(
             "Rule and product changes share this DELTA. Rules: {}; products: {}. Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown.",
             output["rule_paths"], output["product_paths"]
-        ),"delta_refs":rules.iter().chain(products).collect::<Vec<_>>(),"causes":["/outputs/rule_changes"]}));
+        ),"delta_refs":references,"causes":["/outputs/rule_changes"]}));
     }
     Ok(
-        json!({"status":if findings.is_empty(){"pass"}else{"warn"},"findings":findings,"outputs":{"rule_changes":output}}),
+        json!({"status":status,"findings":findings,"outputs":{"rule_changes":output}}),
     )
 }

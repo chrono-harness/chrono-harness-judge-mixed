@@ -129,6 +129,22 @@ fn expect(value: bool) requires value {
 }
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn report_preserves_rule_then_product_references_and_status() {
+    let rules = [1u8, 2u8];
+    let products = [2u8, 3u8];
+    let (pass, none) = policy::report_finding(&rules, &[]);
+    expect(pass == "pass" && none.is_none());
+    let (pass, none) = policy::report_finding(&[], &products);
+    expect(pass == "pass" && none.is_none());
+    let (warn, refs) = policy::report_finding(&rules, &products);
+    expect(warn == "warn" && refs.is_some());
+    let refs = refs.unwrap();
+    expect(refs.len() == 4);
+    expect(*refs[0] == 1 && *refs[1] == 2 && *refs[2] == 2 && *refs[3] == 3);
+}
+
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn surface_changes_preserve_both_endpoints_and_only_named_semantics() {
     proof {
         reveal_strlit("judge-policy"); reveal_strlit("judge-implementation");
