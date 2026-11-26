@@ -2,8 +2,9 @@
 pub mod native;
 mod semantic;
 mod verified_classification;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::BTreeMap;
+use verified_classification as policy;
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
 pub use verified_classification::{
@@ -14,66 +15,58 @@ mod classification;
 pub use classification::Endpoint;
 pub use classification::{document_paths, query as classify_query};
 
-fn classify_endpoints(
-    a: &Endpoint,
-    b: &Endpoint,
-    delta: &[Delta],
+type Classification<'a> =
+    policy::Classification<'a, policy::RuleChange<'a, Value>, policy::PathSurfaces<'a>>;
+
+fn classify_endpoints<'a>(
+    a: &'a Endpoint,
+    b: &'a Endpoint,
+    delta: &'a [Delta],
     before: &Documents,
     after: &Documents,
-) -> Result<Value, String> {
-    let patterns = a.patterns(b);
+) -> Result<Classification<'a>, String> {
+    let patterns: Vec<_> = a.patterns(b).into_iter().collect();
     let accumulated = verified_classification::classified_paths(delta.len(), |i| {
         let d = &delta[i];
-        let old = a.surfaces.get(&d.path).cloned();
-        let new = b.surfaces.get(&d.path).cloned();
-        let Some(surfaces) = verified_classification::endpoints(old.as_deref(), new.as_deref())
+        let old = a.surfaces.get(&d.path);
+        let new = b.surfaces.get(&d.path);
+        let Some(surfaces) =
+            verified_classification::endpoints(old.map(String::as_str), new.map(String::as_str))
         else {
             return Err(format!(
                 "E_SURFACE_REFERENCE: no registration for {}",
                 d.path
             ));
         };
-        let mut fields = vec![];
-        for (path, pointer, on) in patterns.iter().filter(|(p, _, _)| p == &d.path) {
-            if !verified_classification::documents_available(
+        let (old_doc, new_doc) = policy::document_pair(before, after, &d.path);
+        let fields = policy::fields_for_path(
+            &patterns,
+            &d.path,
+            old_doc,
+            new_doc,
+            a.workflow == d.path,
+            b.workflow == d.path,
+            policy::documents_available(
                 d.old_blob.is_some(),
-                before.contains_key(path),
+                old_doc.is_some(),
                 d.new_blob.is_some(),
-                after.contains_key(path),
-            ) {
-                return Err(format!("E_SEMANTIC_INPUT: missing named document {path}"));
-            }
-            fields.extend(semantic::changes(
-                before.get(path),
-                after.get(path),
-                pointer,
-                on,
-                a.workflow == *path,
-                b.workflow == *path,
-            )?);
-        }
-        let classification = json!({"path":d.path,"before_surface":old,"after_surface":new});
-        let product = surfaces.product.then(|| classification.clone());
-        let rule = surfaces.changes_rule(!fields.is_empty()).then(|| {
-            let mut rule = classification;
-            rule["whole_file"] = surfaces.whole_rule.into();
-            rule["semantic"] = fields.into();
-            rule
-        });
-        Ok(verified_classification::ClassifiedPath {
-            path: &d.path,
-            rule,
-            product,
-        })
+                new_doc.is_some(),
+            ),
+            |previous, current, pointer, on, left, right| {
+                semantic::changes(previous, current, pointer, on, left, right)
+            },
+            |path| format!("E_SEMANTIC_INPUT: missing named document {path}"),
+        )?;
+        Ok(policy::surface_row(&d.path, old, new, surfaces, fields))
     })?;
-    let changes = accumulated.rules;
-    let products = accumulated.products;
-    Ok(
-        json!({"mixed":verified_classification::mixed(changes.len(), products.len()),
-        "rule_paths":changes.keys().collect::<Vec<_>>(),"product_paths":products.keys().collect::<Vec<_>>(),
-        "changes":changes.values().collect::<Vec<_>>(),"product_changes":products.values().collect::<Vec<_>>(),
-        "requires_acknowledgement":false}),
-    )
+    let (rule_paths, changes) = accumulated.rules.into_iter().unzip();
+    let (product_paths, product_changes) = accumulated.products.into_iter().unzip();
+    Ok(policy::classification(
+        rule_paths,
+        changes,
+        product_paths,
+        product_changes,
+    ))
 }
 /// Publish the classification for the same interpreted inputs used by classify-v1.
 pub fn produce(
@@ -84,6 +77,18 @@ pub fn produce(
     after: &Documents,
     costs: &Value,
 ) -> Result<Value, String> {
+    serde_json::to_value(costed_classification(a, b, delta, before, after, costs)?)
+        .map_err(|err| err.to_string())
+}
+
+fn costed_classification<'a>(
+    a: &'a Endpoint,
+    b: &'a Endpoint,
+    delta: &'a [Delta],
+    before: &Documents,
+    after: &Documents,
+    costs: &Value,
+) -> Result<policy::Costed<Classification<'a>>, String> {
     let previous = &costs["declared_before"];
     let current = &costs["declared_after"];
     if !verified_classification::cost_report_shape(
@@ -93,7 +98,7 @@ pub fn produce(
     ) {
         return Err("E_COST_INPUT: missing or unsupported cost report".into());
     }
-    let mut output = classify_endpoints(a, b, delta, before, after)?;
+    let output = classify_endpoints(a, b, delta, before, after)?;
     if let Some((index, side)) = verified_classification::first_missing_cost(delta.len(), |i| {
         let node = format!("file:{}", delta[i].path);
         (previous.get(&node).is_some(), current.get(&node).is_some())
@@ -104,6 +109,5 @@ pub fn produce(
             delta[index].path
         ));
     }
-    output["schema"] = MIXED_SCHEMA.into();
-    Ok(output)
+    Ok(policy::costed(output))
 }
