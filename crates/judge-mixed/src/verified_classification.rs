@@ -1452,4 +1452,228 @@ pub fn first_missing_cost<F: Fn(usize) -> (bool, bool)>(count: usize, lookup: F)
     None
 }
 
+/// Evaluate only declarations for this DELTA path. Each callback receives
+/// the actual old and new documents and the matching endpoint's workflow flag.
+pub open spec fn field_batch<'a,T,V:'a,E,F:Fn(Option<&'a V>,Option<&'a V>,&String,&String,bool,bool)->Result<Vec<T>,E>>(
+    p:Pattern,path:&String,a:Option<&'a V>,b:Option<&'a V>,ow:bool,nw:bool,valid:bool,visit:F,batch:Vec<T>,
+)->bool {
+    if p.0@==path@ {valid && visit.ensures((a,b,&p.1,&p.2,ow,nw),Ok::<Vec<T>,E>(batch))}
+    else {batch.len()==0}
+}
+pub open spec fn flattened<T>(batches:Seq<Vec<T>>)->Seq<T>
+    decreases batches.len(),
+{ if batches.len()==0 {Seq::empty()} else {flattened(batches.drop_last())+batches.last()@} }
+
+pub open spec fn visited_patterns<'a,T,V:'a,E,F:Fn(Option<&'a V>,Option<&'a V>,&String,&String,bool,bool)->Result<Vec<T>,E>>(
+    ps:Seq<Pattern>,n:int,path:&String,a:Option<&'a V>,b:Option<&'a V>,ow:bool,nw:bool,valid:bool,visit:F,batches:Seq<Vec<T>>,
+)->bool {
+    batches.len()==n && forall|i:int| 0<=i<n ==> #[trigger] field_batch(ps[i],path,a,b,ow,nw,valid,visit,batches[i])
+}
+
+pub fn fields_for_path<'a,T,V,E,F,M>(ps:&[Pattern],path:&String,a:Option<&'a V>,b:Option<&'a V>,
+    ow:bool,nw:bool,valid:bool,visit:F,missing:M)->(out:Result<Vec<T>,E>)
+    where F:Fn(Option<&'a V>,Option<&'a V>,&String,&String,bool,bool)->Result<Vec<T>,E>, M:FnOnce(&String)->E,
+    requires missing.requires((path,)), forall|a:Option<&'a V>,b:Option<&'a V>,s:&String,t:&String,x:bool,y:bool|visit.requires((a,b,s,t,x,y)),
+    ensures match out {
+        Ok(values)=>exists|batches:Seq<Vec<T>>| #[trigger] visited_patterns(ps@,ps.len() as int,path,a,b,ow,nw,valid,visit,batches)
+            && values@==flattened(batches),
+        Err(e)=>exists|i:int,batches:Seq<Vec<T>>| 0<=i<ps.len() && ps@[i].0@==path@
+            && #[trigger] visited_patterns(ps@,i,path,a,b,ow,nw,valid,visit,batches)
+            && (if valid {visit.ensures((a,b,&ps@[i].1,&ps@[i].2,ow,nw),Err::<Vec<T>,E>(e))} else {missing.ensures((path,),e)}),
+    },
+{
+    let mut values=Vec::new();let mut i=0;let ghost mut batches:Seq<Vec<T>>=Seq::empty();
+    while i<ps.len()
+        invariant i<=ps.len(),visited_patterns(ps@,i as int,path,a,b,ow,nw,valid,visit,batches),values@==flattened(batches),
+            missing.requires((path,)),forall|a:Option<&'a V>,b:Option<&'a V>,s:&String,t:&String,x:bool,y:bool|visit.requires((a,b,s,t,x,y)),
+        decreases ps.len()-i,
+    {
+        let p=&ps[i];
+        let ghost mut batch:Vec<T>;
+        if <&str>::exec_eq(p.0.as_str(),path.as_str()) {
+            assert(ps@[i as int].0@==path@);
+            if !valid {let e=missing(path);assert(missing.ensures((path,),e));assert(visited_patterns(ps@,i as int,path,a,b,ow,nw,valid,visit,batches));return Err(e)}
+            let mut next=match visit(a,b,&p.1,&p.2,ow,nw) {
+                Ok(items)=>items,
+                Err(e)=>{assert(visit.ensures((a,b,&ps@[i as int].1,&ps@[i as int].2,ow,nw),Err::<Vec<T>,E>(e)));assert(visited_patterns(ps@,i as int,path,a,b,ow,nw,valid,visit,batches));return Err(e)}
+            };
+            proof {batch=next;}
+            values.append(&mut next);
+        } else { let empty:Vec<T>=Vec::new(); proof {batch=empty;} }
+        proof {
+            let extended=batches.push(batch);
+            assert(extended.drop_last() =~= batches);
+            assert(field_batch(ps@[i as int],path,a,b,ow,nw,valid,visit,batch));
+            assert forall|j:int| 0<=j<i+1 implies #[trigger] field_batch(ps@[j],path,a,b,ow,nw,valid,visit,extended[j]) by {
+                if j<i {assert(extended[j]==batches[j]);}
+                else {assert(extended[j]==batch);}
+            }
+            assert(visited_patterns(ps@,i+1,path,a,b,ow,nw,valid,visit,extended));
+            batches=extended;
+        }
+        i+=1;
+    }
+    assert(visited_patterns(ps@,ps.len() as int,path,a,b,ow,nw,valid,visit,batches));
+    Ok(values)
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct Selection<T> {
+    pub pointer:String, pub value:T,
+    #[cfg_attr(not(verus_keep_ghost),serde(skip))]
+    pub normalized:T,
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct SemanticChange<'a,K,V> {
+    pub pattern:&'a str, pub on:&'a str, pub identity:&'a K,
+    pub before:Option<&'a V>, pub after:Option<&'a V>,
+}
+
+pub fn semantic_change<'a,K,V>(pattern:&'a str, on:&'a str, d:Difference<'a,K,V>)
+    -> (out:SemanticChange<'a,K,V>)
+    ensures out.pattern==pattern && out.on==on && out.identity==d.key && out.before==d.before && out.after==d.after,
+{ SemanticChange {pattern,on,identity:d.key,before:d.before,after:d.after} }
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]
+pub struct PathSurfaces<'a> {
+    pub path:&'a String, pub before_surface:Option<&'a String>, pub after_surface:Option<&'a String>,
+}
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]
+pub struct RuleChange<'a,T> {
+    #[cfg_attr(not(verus_keep_ghost),serde(flatten))]
+    pub surfaces:PathSurfaces<'a>, pub whole_file:bool, pub semantic:Vec<T>,
+}
+
+pub fn surface_row<'a,T>(path:&'a String, before:Option<&'a String>, after:Option<&'a String>,
+    mask:Surfaces, fields:Vec<T>) -> (out:ClassifiedPath<'a,RuleChange<'a,T>,PathSurfaces<'a>>)
+    ensures out.path==path,
+        out.rule.is_some()==(mask.whole_rule || fields.len()>0),out.product.is_some()==mask.product,
+        out.rule matches Some(r) ==> r.surfaces.path==path && r.surfaces.before_surface==before
+            && r.surfaces.after_surface==after && r.whole_file==mask.whole_rule && r.semantic==fields,
+        out.product matches Some(p) ==> p.path==path && p.before_surface==before && p.after_surface==after,
+{
+    let rule=if mask.changes_rule(fields.len()>0) {
+        Some(RuleChange {surfaces:PathSurfaces {path,before_surface:before,after_surface:after},whole_file:mask.whole_rule,semantic:fields})
+    } else {None};
+    let product=if mask.product {Some(PathSurfaces {path,before_surface:before,after_surface:after})} else {None};
+    ClassifiedPath {path,rule,product}
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct Classification<'a,R,P> {
+    pub mixed:bool,pub rule_paths:Vec<&'a String>,pub product_paths:Vec<&'a String>,
+    pub changes:Vec<R>,pub product_changes:Vec<P>,pub requires_acknowledgement:bool,
+}
+
+pub fn classification<'a,R,P>(rule_paths:Vec<&'a String>,changes:Vec<R>,product_paths:Vec<&'a String>,product_changes:Vec<P>)
+    -> (out:Classification<'a,R,P>)
+    ensures out.mixed==(rule_paths.len()>0 && product_paths.len()>0),
+        !out.requires_acknowledgement && out.rule_paths==rule_paths && out.product_paths==product_paths
+        && out.changes==changes && out.product_changes==product_changes,
+{
+    Classification {mixed:mixed(rule_paths.len(),product_paths.len()),rule_paths,product_paths,changes,product_changes,requires_acknowledgement:false}
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct Costed<T> {
+    pub schema:&'static str,
+    #[cfg_attr(not(verus_keep_ghost),serde(flatten))]
+    pub classification:T,
+}
+pub fn costed<T>(classification:T)->(out:Costed<T>)
+    ensures out.schema@=="chrono-rule-changes/v2"@ && out.classification==classification,
+{ Costed {schema:"chrono-rule-changes/v2",classification} }
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct BoundReport<T,B> {
+    #[cfg_attr(not(verus_keep_ghost),serde(flatten))]
+    pub changes:T, pub binding:B,
+}
+pub fn bind_report<T,B>(changes:T,binding:B)->(out:BoundReport<T,B>)
+    ensures out.changes==changes && out.binding==binding,
+{ BoundReport {changes,binding} }
+
+pub fn warning_message(rules:&str,products:&str) -> (out:String)
+    ensures out@=="Rule and product changes share this DELTA. Rules: "@ + rules@ + "; products: "@ + products@
+        + ". Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown."@,
+{
+    let mut out=String::from_str("Rule and product changes share this DELTA. Rules: ");
+    out.append(rules);
+    out.append("; products: ");
+    out.append(products);
+    out.append(". Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown.");
+    out
+}
+pub open spec fn some_items<T>(items:Seq<Option<T>>) -> Seq<T>
+    decreases items.len(),
+{ if items.len()==0 {Seq::empty()} else {
+    let prefix=some_items(items.drop_last());match items.last() {None=>prefix,Some(v)=>prefix.push(v)}
+} }
+
+/// Preserve all selected changes in the identity iterator's exact order.
+pub fn changed_items<K,T,F>(keys:&[K], project:F)->(out:Vec<T>)
+    where F:Fn(&K)->Option<T>,
+    requires forall|k:&K| project.requires((k,)),
+    ensures exists|items:Seq<Option<T>>| #[trigger] projected(keys@,keys.len() as int,project,items) && out@==some_items(items),
+{
+    let mut out=Vec::new();let mut i=0;let ghost mut items=Seq::empty();
+    while i<keys.len()
+        invariant i<=keys.len(),projected(keys@,i as int,project,items),out@==some_items(items),
+            forall|k:&K| project.requires((k,)),
+        decreases keys.len()-i,
+    {
+        let value=project(&keys[i]);let ghost next=items.push(value);
+        assert(next.drop_last() =~= items);
+        if let Some(x)=value {out.push(x);}
+        assert forall|j:int| 0<=j<i+1 implies project.ensures((&keys@[j],),#[trigger] next[j]) by {
+            if j<i {assert(next[j]==items[j]);}
+        }
+        proof {items=next;}
+        i+=1;
+    }
+    assert(projected(keys@,keys.len() as int,project,items));
+    out
+}
+pub open spec fn projected<K,T,F:Fn(&K)->Option<T>>(keys:Seq<K>,n:int,project:F,items:Seq<Option<T>>)->bool {
+    items.len()==n && forall|j:int| 0<=j<n ==> project.ensures((&keys[j],),#[trigger] items[j])
+}
+pub fn document_pair<'a,V>(before:&'a BTreeMap<String,V>,after:&'a BTreeMap<String,V>,path:&String)
+    -> (out:(Option<&'a V>,Option<&'a V>))
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures match out.0 {Some(v)=>before@.contains_key(*path) && *v==before@[*path],None=>!before@.contains_key(*path)},
+        match out.1 {Some(v)=>after@.contains_key(*path) && *v==after@[*path],None=>!after@.contains_key(*path)},
+{ (before.get(path),after.get(path)) }
+
+pub open spec fn side_result<V,K,S,E,F:Fn(&V,bool)->Result<BTreeMap<K,S>,E>>(
+    source:Option<&V>,workflow:bool,select:F,out:Result<BTreeMap<K,S>,E>,
+)->bool {
+    match source {None=>out matches Ok(entries) && entries@==Map::<K,S>::empty(),Some(v)=>select.ensures((v,workflow),out)}
+}
+fn select_side<V,K:Ord,S,E,F:Fn(&V,bool)->Result<BTreeMap<K,S>,E>>(
+    source:Option<&V>,workflow:bool,select:&F,
+)->(out:Result<BTreeMap<K,S>,E>)
+    requires forall|v:&V,w:bool| select.requires((v,w)),
+    ensures side_result(source,workflow,*select,out),
+{
+    match source {None=>Ok(BTreeMap::new()),Some(v)=>select(v,workflow)}
+}
+pub fn selected_sides<V,K:Ord,S,E,F:Fn(&V,bool)->Result<BTreeMap<K,S>,E>>(
+    before:Option<&V>,after:Option<&V>,old_workflow:bool,new_workflow:bool,select:F,
+)->(out:Result<(BTreeMap<K,S>,BTreeMap<K,S>),E>)
+    requires forall|v:&V,w:bool| select.requires((v,w)),
+    ensures match out {
+        Ok((old,new))=>side_result(before,old_workflow,select,Ok::<BTreeMap<K,S>,E>(old))
+            && side_result(after,new_workflow,select,Ok::<BTreeMap<K,S>,E>(new)),
+        Err(e)=>side_result(before,old_workflow,select,Err::<BTreeMap<K,S>,E>(e))
+            || ((exists|old:BTreeMap<K,S>| #[trigger] side_result(before,old_workflow,select,Ok::<BTreeMap<K,S>,E>(old)))
+              && side_result(after,new_workflow,select,Err::<BTreeMap<K,S>,E>(e))),
+    },
+{
+    let old=select_side(before,old_workflow,&select)?;
+    let new=select_side(after,new_workflow,&select)?;
+    Ok((old,new))
+}
+
 }

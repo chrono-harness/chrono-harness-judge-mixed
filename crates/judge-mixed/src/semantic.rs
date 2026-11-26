@@ -93,12 +93,8 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
         _ => Ok(json!(["scalar", value])),
     }
 }
-struct Selection {
-    pointer: String,
-    value: Value,
-    normalized: Value,
-}
-type Selections = BTreeMap<Vec<String>, Selection>;
+use crate::verified_classification::Selection;
+type Selections = BTreeMap<Vec<String>, Selection<Value>>;
 fn select(
     value: &Value,
     parts: &[String],
@@ -183,45 +179,41 @@ pub fn changes(
     after_workflow: bool,
 ) -> Result<Vec<Value>, String> {
     let parts = tokens(pattern)?;
-    let mut old = Selections::new();
-    let mut new = Selections::new();
-    if let Some(v) = before {
-        select(
-            v,
-            &parts,
-            0,
-            String::new(),
-            vec![],
-            &mut old,
-            before_workflow,
-        )?;
-    }
-    if let Some(v) = after {
-        select(
-            v,
-            &parts,
-            0,
-            String::new(),
-            vec![],
-            &mut new,
-            after_workflow,
-        )?;
-    }
-    let keys = crate::verified_classification::selection_keys(&old, &new);
-    let mut changes = vec![];
-    for key in keys {
-        let Some(difference) = crate::verified_classification::difference(
-            key,
-            old.get(key),
-            new.get(key),
-            on,
-            |before, after| before.normalized == after.normalized,
-        ) else {
-            continue;
-        };
-        let encode = |s: &Selection| json!({"pointer":s.pointer,"value":s.value});
-        changes.push(json!({"pattern":pattern,"on":on,"identity":difference.key,
-            "before":difference.before.map(encode),"after":difference.after.map(encode)}));
-    }
-    Ok(changes)
+    let (old, new) = crate::verified_classification::selected_sides(
+        before,
+        after,
+        before_workflow,
+        after_workflow,
+        |value, workflow| {
+            let mut selected = Selections::new();
+            select(
+                value,
+                &parts,
+                0,
+                String::new(),
+                vec![],
+                &mut selected,
+                workflow,
+            )?;
+            Ok::<_, String>(selected)
+        },
+    )?;
+    let keys: Vec<_> = crate::verified_classification::selection_keys(&old, &new)
+        .into_iter()
+        .collect();
+    Ok(crate::verified_classification::changed_items(
+        &keys,
+        |&key| {
+            let difference = crate::verified_classification::difference(
+                key,
+                old.get(key),
+                new.get(key),
+                on,
+                |before, after| before.normalized == after.normalized,
+            )?;
+            Some(json!(crate::verified_classification::semantic_change(
+                pattern, on, difference
+            )))
+        },
+    ))
 }

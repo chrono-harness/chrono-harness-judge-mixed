@@ -78,5 +78,12 @@ pub fn query(input: impl Read) -> Result<Value, String> {
     let q: Query = read(input)?;
     q.base.validate()?;
     q.candidate.validate()?;
-    classify_endpoints(&q.base, &q.candidate, &q.delta, &q.before, &q.after)
+    serde_json::to_value(classify_endpoints(
+        &q.base,
+        &q.candidate,
+        &q.delta,
+        &q.before,
+        &q.after,
+    )?)
+    .map_err(|e| e.to_string())
 }

@@ -636,3 +636,58 @@ fn native_plan_requires_matching_predecessors_before_selecting_documents() {
         assert!(plan(&bad).unwrap_err().starts_with("E_IMPACT"));
     }
 }
+
+#[test]
+fn public_classification_and_report_preserve_each_physical_value_and_reference() {
+    let path = "settings";
+    let base_rules = json!([
+        {"path":"unused","pointers":["/missing"],"on":"add-modify-delete"},
+        {"path":"settings","pointers":["/rows/*/v","/a~1b"],"on":"add-modify-delete"}
+    ]);
+    let candidate_rules = json!([
+        {"path":"settings","pointers":["/a~1b","/added"],"on":"add-modify-delete"}
+    ]);
+    let base = json!({"workflow":"w", "surfaces":{"settings":"judge-policy","code":"product"},
+        "semantic_fields":base_rules});
+    let candidate = json!({"workflow":"w", "surfaces":{"settings":"test","code":"product"},
+        "semantic_fields":candidate_rules});
+    let mut request = json!({"base":base, "candidate":candidate,
+        "delta":[delta(path),delta("code"),delta(path)],
+        "before":{"settings":{"a/b":null, "rows":[{"id":"a","v":1},{"id":"b","v":2}]}},
+        "after":{"settings":{"rows":[{"id":"b","v":2},{"id":"a","v":3}],"added":"x"}}});
+    let semantic = json!([
+        {"pattern":"/added","on":"add-modify-delete","identity":["key:added"],
+            "before":null,"after":{"pointer":"/added","value":"x"}},
+        {"pattern":"/a~1b","on":"add-modify-delete","identity":["key:a/b"],
+            "before":{"pointer":"/a~1b","value":null},"after":null},
+        {"pattern":"/rows/*/v","on":"add-modify-delete","identity":["key:rows","id:a","key:v"],
+            "before":{"pointer":"/rows/0/v","value":1},"after":{"pointer":"/rows/1/v","value":3}}
+    ]);
+    let expected = json!({"mixed":true,"requires_acknowledgement":false,
+        "rule_paths":["settings"],"product_paths":["code","settings"],
+        "changes":[{"path":path,"before_surface":"judge-policy","after_surface":"test","whole_file":true,"semantic":semantic}],
+        "product_changes":[{"path":"code","before_surface":"product","after_surface":"product"},
+            {"path":path,"before_surface":"judge-policy","after_surface":"test"}]});
+    let raw = serde_json::to_vec(&request).unwrap();
+    assert_eq!(
+        chrono_judge_mixed::classify_query(raw.as_slice()).unwrap(),
+        expected
+    );
+    let binding = json!({"real":"context"});
+    let costs = json!({"file:settings":null,"file:code":null});
+    request["warning_code"] = json!("HOST_CODE");
+    request["context"] = json!({"binding":binding,"costs":{"schema":"chrono-costs/v1","declared_before":costs,"declared_after":costs}});
+    let mut bound = expected;
+    bound["schema"] = json!("chrono-rule-changes/v2");
+    bound["binding"] = binding;
+    let expected_report = json!({"status":"warn","findings":[{
+        "code":"HOST_CODE","level":"warning","delta_refs":["settings","code","settings"],
+        "causes":["/outputs/rule_changes"],
+        "message":"Rule and product changes share this DELTA. Rules: [\"settings\"]; products: [\"code\",\"settings\"]. Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown."
+    }],"outputs":{"rule_changes":bound}});
+    let raw = serde_json::to_vec(&request).unwrap();
+    assert_eq!(
+        chrono_judge_mixed::native::report(raw.as_slice()).unwrap(),
+        expected_report
+    );
+}

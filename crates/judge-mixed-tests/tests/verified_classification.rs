@@ -12,6 +12,80 @@ use vstd::string::StringExecFns;
 use vstd::vpanic as panic;
 
 verus! {
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn both_document_sides_and_all_projected_changes_survive()
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    let path=String::from_str("one");
+    let mut old=std::collections::BTreeMap::<String,u8>::new();
+    let mut new=std::collections::BTreeMap::<String,u8>::new();
+    old.insert(path.clone(),5);new.insert(path.clone(),9);
+    let (left,right)=policy::document_pair(&old,&new,&path);
+    expect(matches!(left,Some(x) if *x==5) && matches!(right,Some(x) if *x==9));
+    let candidate=|flag:&u8| -> (out:Option<u8>) ensures out==(if *flag==1 {None} else {Some(*flag)}), {
+        if *flag==1 {None} else {Some(*flag)}
+    };
+    let keys=[3u8,1u8,8u8];let changes=policy::changed_items(&keys,candidate);
+    proof {
+        let items=choose|items:Seq<Option<u8>>| #[trigger] policy::projected(keys@,3,candidate,items) && changes@==policy::some_items(items);
+        assert(candidate.ensures((&keys@[0],),items[0]));assert(candidate.ensures((&keys@[1],),items[1]));
+        assert(candidate.ensures((&keys@[2],),items[2]));
+        assert(items =~= seq![Some(3u8),None,Some(8u8)]);
+        reveal_with_fuel(policy::some_items,4);
+    }
+    expect(changes.len()==2 && changes[0]==3 && changes[1]==8);
+}
+
+#[cfg(verus_keep_ghost)]
+fn one_rule_receives_the_old_and_new_documents_and_preserves_the_other_path<T>(
+    path:&String, other:&String, pointer:&String, on:&String, first:&T, second:&T,
+)
+    requires path@!=other@,
+{
+    let rules=vec![(other.clone(),pointer.clone(),on.clone()),(path.clone(),pointer.clone(),on.clone())];
+    let evaluate=|a:Option<&T>,b:Option<&T>,p:&String,m:&String,left:bool,right:bool| -> (out:Result<Vec<u8>,u8>)
+        ensures (a==Some(first) && b==Some(second) && p==pointer && m==on && left && !right)
+            ==> (out matches Ok(v) && v@==seq![4u8,9u8]),
+        { Ok(vec![4u8,9u8]) };
+    let err=|_p:&String| ->(x:u8) ensures x==3, {3u8};
+    let output=policy::fields_for_path(&rules,path,Some(first),Some(second),true,false,true,evaluate,err);
+    proof { if let Ok(values)=output {
+        let batches=choose|batches:Seq<Vec<u8>>| #[trigger] policy::visited_patterns(rules@,2,path,Some(first),Some(second),true,false,true,evaluate,batches)
+            && values@==policy::flattened(batches);
+        assert(policy::field_batch(rules@[0],path,Some(first),Some(second),true,false,true,evaluate,batches[0]));
+        assert(policy::field_batch(rules@[1],path,Some(first),Some(second),true,false,true,evaluate,batches[1]));
+        assert(batches[0].len()==0 && batches[1]@==seq![4u8,9u8]);
+        reveal_with_fuel(policy::flattened,3);
+        assert(values@ =~= seq![4u8,9u8]);
+    } else if let Err(e)=output {
+        let (i,batches)=choose|i:int,batches:Seq<Vec<u8>>| 0<=i<2 && rules@[i].0@==path@
+            && #[trigger] policy::visited_patterns(rules@,i,path,Some(first),Some(second),true,false,true,evaluate,batches)
+            && evaluate.ensures((Some(first),Some(second),&rules@[i].1,&rules@[i].2,true,false),Err::<Vec<u8>,u8>(e));
+        assert(i==1);assert(false);
+    } }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn typed_classification_and_report_keep_every_distinct_source_field() {
+    let path=String::from_str("p");let old=String::from_str("old");let new=String::from_str("new");
+    let change=policy::semantic_change("/v","add-modify-delete",policy::Difference {key:&path,before:Some(&3u8),after:Some(&8u8)});
+    expect(<&str>::exec_eq(change.identity.as_str(),path.as_str()) && matches!(change.before,Some(x) if *x==3) && matches!(change.after,Some(x) if *x==8));
+    expect(<&str>::exec_eq(change.pattern,"/v") && <&str>::exec_eq(change.on,"add-modify-delete"));
+    let row=policy::surface_row(&path,Some(&old),Some(&new),policy::Surfaces{whole_rule:false,product:true},vec![4u8,9u8]);
+    let r=row.rule.unwrap();let p=row.product.unwrap();
+    expect(!r.whole_file && r.semantic.len()==2 && r.semantic[0]==4 && r.semantic[1]==9);
+    expect(<&str>::exec_eq(r.surfaces.path.as_str(),path.as_str()) && <&str>::exec_eq(p.path.as_str(),path.as_str()));
+    expect(<&str>::exec_eq(r.surfaces.before_surface.unwrap().as_str(),old.as_str()) && <&str>::exec_eq(r.surfaces.after_surface.unwrap().as_str(),new.as_str()));
+    expect(<&str>::exec_eq(p.before_surface.unwrap().as_str(),old.as_str()) && <&str>::exec_eq(p.after_surface.unwrap().as_str(),new.as_str()));
+    let out=policy::classification(vec![&path],vec![1u8],vec![&new],vec![2u8]);
+    expect(out.mixed && !out.requires_acknowledgement && <&str>::exec_eq(out.rule_paths[0].as_str(),path.as_str()) && <&str>::exec_eq(out.product_paths[0].as_str(),new.as_str()));
+    expect(out.changes[0]==1 && out.product_changes[0]==2);
+    let costed=policy::costed(out);
+    expect(<&str>::exec_eq(costed.schema,"chrono-rule-changes/v2"));
+    let bound=policy::bind_report(costed,10u8);
+    expect(bound.binding==10 && bound.changes.classification.changes[0]==1);
+}
+
 
 #[cfg(verus_keep_ghost)]
 fn plan_checks_whole_endpoint_before_schema_or_deserialization(
