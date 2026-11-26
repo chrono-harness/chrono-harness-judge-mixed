@@ -27,19 +27,20 @@ fn main() -> std::process::ExitCode {
             DataCommand::Plan => chrono_judge_mixed::native::plan(input),
             DataCommand::Report => chrono_judge_mixed::native::report(input),
             DataCommand::Classify => chrono_judge_mixed::classify_query(input),
-        }
-        .and_then(|value| {
+        };
+        let written = chrono_judge_mixed::on_success(result, |value| {
             let mut out = std::io::stdout().lock();
             serde_json::to_writer(&mut out, &value).map_err(|e| e.to_string())?;
+            Ok(out)
+        });
+        let flushed = chrono_judge_mixed::on_success(written, |mut out| {
             out.flush().map_err(|e| e.to_string())
         });
-        return match result {
-            Ok(()) => std::process::ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("{error}");
-                2.into()
-            }
-        };
+        let (status, error) = chrono_judge_mixed::data_exit(flushed);
+        if let Some(error) = error {
+            eprintln!("{error}");
+        }
+        return status.into();
     }
     let executable = match std::env::current_exe() {
         Ok(path) => path,
