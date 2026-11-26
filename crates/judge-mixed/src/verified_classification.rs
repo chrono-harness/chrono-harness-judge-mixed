@@ -433,6 +433,100 @@ pub fn data_command(name: &str, extra: usize) -> (selected: Option<Result<DataCo
     Some(if extra == 0 { Ok(command) } else { Err(name) })
 }
 
+pub enum Route<'a> {
+    Version,
+    Data(Result<DataCommand, &'a str>),
+    Prepare,
+    Pipeline,
+}
+
+pub open spec fn is_data(s: Seq<char>) -> bool {
+    s == "document-paths-v1"@ || s == "classify-v1"@ || s == "plan-classification-v1"@ || s == "report-v1"@
+}
+
+pub fn route(operation: Option<&str>, extra: usize) -> (selected: Route<'_>)
+    ensures match operation {
+        None => selected is Pipeline,
+        Some(s) => {
+            &&& (selected is Version) == (extra == 0 && s@ == "--version"@)
+            &&& (selected is Prepare) == (extra == 0 && s@ == "prepare-classification-v1"@)
+            &&& (selected is Data) == is_data(s@)
+            &&& (selected is Pipeline) == (!is_data(s@) && (extra > 0 || (s@ != "--version"@ && s@ != "prepare-classification-v1"@)))
+            &&& selected matches Route::Data(Err(label)) ==> extra > 0 && label@ == s@
+            &&& selected matches Route::Data(Ok(command)) ==> extra == 0 && match command {
+                DataCommand::Classify => s@ == "classify-v1"@,
+                DataCommand::Documents => s@ == "document-paths-v1"@,
+                DataCommand::Plan => s@ == "plan-classification-v1"@,
+                DataCommand::Report => s@ == "report-v1"@,
+            }
+        },
+    },
+{
+    proof {
+        reveal_strlit("--version"); reveal_strlit("prepare-classification-v1");
+        reveal_strlit("document-paths-v1"); reveal_strlit("classify-v1");
+        reveal_strlit("plan-classification-v1"); reveal_strlit("report-v1");
+    }
+    let name = match operation { None => return Route::Pipeline, Some(name) => name };
+    if extra == 0 && <&str>::exec_eq(name,"--version") {
+        assert(name@[0] == '-');
+        assert("document-paths-v1"@[0] == 'd' && "classify-v1"@[0] == 'c'
+            && "plan-classification-v1"@[0] == 'p' && "report-v1"@[0] == 'r');
+        assert(!is_data(name@));
+        assert(name@ != "prepare-classification-v1"@);
+        return Route::Version;
+    }
+    if let Some(selected) = data_command(name,extra) { return Route::Data(selected); }
+    if extra == 0 && <&str>::exec_eq(name,"prepare-classification-v1") { Route::Prepare }
+    else { Route::Pipeline }
+}
+
+pub enum Argument<'a,A> { Text(&'a str), Executable(&'a A) }
+
+pub struct Invocation<'a,A,T> {
+    pub program: &'static str,
+    pub prefix: Vec<Argument<'a,A>>,
+    pub forwarded: &'a [T],
+}
+
+pub fn invocation<'a,A,T>(prepare: bool, executable: &'a A, version: &'a str, arguments: &'a [T])
+    -> (result: Invocation<'a,A,T>)
+    ensures
+        prepare ==> result.program@ == "chrono-judge-registration"@ && result.forwarded.len() == 0
+            && result.prefix@ == seq![Argument::<A>::Text("classification-inputs-v1"), Argument::Executable(executable)],
+        !prepare ==> result.program@ == "chrono-harness"@ && result.forwarded@ == arguments@
+            && result.prefix@ == seq![Argument::<A>::Text("judge-pipeline"), Argument::Text("chrono-judge-mixed"),
+                Argument::Text(version), Argument::Executable(executable), Argument::Text("prepare-classification-v1"),
+                Argument::Executable(executable), Argument::Text("report-v1")],
+{
+    if prepare {
+        Invocation { program: "chrono-judge-registration",
+            prefix: vec![Argument::Text("classification-inputs-v1"), Argument::Executable(executable)], forwarded: &[] }
+    } else {
+        Invocation { program: "chrono-harness", prefix: vec![Argument::Text("judge-pipeline"),
+            Argument::Text("chrono-judge-mixed"), Argument::Text(version), Argument::Executable(executable),
+            Argument::Text("prepare-classification-v1"), Argument::Executable(executable), Argument::Text("report-v1")],
+            forwarded: arguments }
+    }
+}
+
+/// Successful exec replaces this process. Both callbacks can supply actual
+/// platform errors; only a returned exec can produce the destination's error.
+pub fn delegation_failure<P,E,L,X>(locate:L, execute:X)
+    -> (failure:(u8,&'static str,E))
+    where L:FnOnce()->Result<P,E>, X:FnOnce(P)->(&'static str,E),
+    requires locate.requires(()), forall|p:P| execute.requires((p,)),
+    ensures failure.0 == 2 && (
+        (locate.ensures((),Err::<P,E>(failure.2)) && failure.1@ == "chrono-judge-mixed"@)
+        || exists|p:P| #[trigger] locate.ensures((),Ok::<P,E>(p))
+            && execute.ensures((p,), (failure.1,failure.2))
+    ),
+{
+    let path = match locate() { Ok(path) => path, Err(e) => return (2,"chrono-judge-mixed",e) };
+    let (program,error) = execute(path);
+    (2,program,error)
+}
+
 pub const INPUT_LIMIT: usize = 64 * 1024 * 1024;
 
 pub fn admits_input(bytes: usize) -> (allowed: bool)
