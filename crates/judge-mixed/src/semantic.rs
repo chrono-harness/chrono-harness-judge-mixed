@@ -5,33 +5,20 @@ use crate::verified_classification::{
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-fn escape(s: &str) -> String {
-    s.replace('~', "~0").replace('/', "~1")
+fn child_pointer(parent: &str, key: &str) -> String {
+    crate::verified_classification::child_pointer(parent, key)
+        .into_iter()
+        .collect()
 }
 fn tokens(pointer: &str) -> Result<Vec<String>, String> {
-    let tail = pointer
-        .strip_prefix('/')
-        .ok_or("E_SEMANTIC_POINTER: expected / prefix")?;
-    tail.split('/')
-        .map(|part| {
-            let mut decoded = String::new();
-            let mut chars = part.chars();
-            while let Some(c) = chars.next() {
-                decoded.push(if c == '~' {
-                    match chars.next() {
-                        Some('0') => '~',
-                        Some('1') => '/',
-                        _ => {
-                            return Err(format!("E_SEMANTIC_POINTER: invalid escape in {pointer}"));
-                        }
-                    }
-                } else {
-                    c
-                });
-            }
-            Ok(decoded)
-        })
-        .collect()
+    use crate::verified_classification::{PointerError, decode_pointer};
+    match decode_pointer(pointer) {
+        Ok(parts) => Ok(parts.into_iter().map(String::from_iter).collect()),
+        Err(PointerError::Prefix) => Err("E_SEMANTIC_POINTER: expected / prefix".into()),
+        Err(PointerError::Escape) => {
+            Err(format!("E_SEMANTIC_POINTER: invalid escape in {pointer}"))
+        }
+    }
 }
 fn field<'a>(row: &'a Value, name: &str) -> IdentityField<'a> {
     match row.get(name) {
@@ -75,7 +62,7 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
             map.iter()
                 .map(|(k, v)| Ok((
                     k.clone(),
-                    normalized(v, &format!("{pointer}/{}", escape(k)), workflow)?
+                    normalized(v, &child_pointer(pointer, k), workflow)?
                 )))
                 .collect::<Result<BTreeMap<_, _>, String>>()?
         ])),
@@ -83,7 +70,7 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
             let values = rows
                 .iter()
                 .enumerate()
-                .map(|(i, v)| normalized(v, &format!("{pointer}/{i}"), workflow))
+                .map(|(i, v)| normalized(v, &child_pointer(pointer, &i.to_string()), workflow))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(
                 if let Some(ids) = row_ids(rows, retirement_rows(workflow, pointer))? {
@@ -131,7 +118,7 @@ fn select(
                     select(
                         child,
                         &rest[1..],
-                        format!("{pointer}/{}", escape(key)),
+                        child_pointer(&pointer, key),
                         next,
                         out,
                         workflow,
@@ -153,7 +140,7 @@ fn select(
                     select(
                         child,
                         &rest[1..],
-                        format!("{pointer}/{index}"),
+                        child_pointer(&pointer, &index),
                         next,
                         out,
                         workflow,
