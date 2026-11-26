@@ -1,6 +1,7 @@
 //! Stable row identities are separate from physical JSON pointers.
 use crate::verified_classification::{
-    IdentityField, RowIdentity, new_row, record_selection, retirement_rows, row_identity,
+    IdentityField, RowIdentity, matches_child, new_row, record_selection, requires_row_identity,
+    retirement_rows, row_identity,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,10 +42,9 @@ fn field<'a>(row: &'a Value, name: &str) -> IdentityField<'a> {
 }
 
 fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<String>>, String> {
-    if !rows
-        .iter()
-        .any(|r| r.get("id").is_some() || r.get("path").is_some())
-    {
+    if !requires_row_identity(rows.len(), |i| {
+        rows[i].get("id").is_some() || rows[i].get("path").is_some()
+    }) {
         return Ok(None);
     }
     let mut seen = BTreeSet::new();
@@ -125,7 +125,7 @@ fn select(
     match value {
         Value::Object(map) => {
             for (key, child) in map {
-                if token == "*" || token == key {
+                if matches_child(token, key) {
                     let mut next = identity.clone();
                     next.push(format!("key:{key}"));
                     select(
@@ -142,17 +142,18 @@ fn select(
         Value::Array(rows) => {
             let ids = row_ids(rows, retirement_rows(workflow, &pointer))?;
             for (i, child) in rows.iter().enumerate() {
-                if token == "*" || token == &i.to_string() {
+                let index = i.to_string();
+                if matches_child(token, &index) {
                     let mut next = identity.clone();
                     next.push(
                         ids.as_ref()
                             .map(|ids| ids[i].clone())
-                            .unwrap_or_else(|| format!("index:{i}")),
+                            .unwrap_or_else(|| format!("index:{index}")),
                     );
                     select(
                         child,
                         &rest[1..],
-                        format!("{pointer}/{i}"),
+                        format!("{pointer}/{index}"),
                         next,
                         out,
                         workflow,

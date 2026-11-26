@@ -76,6 +76,34 @@ pub enum IdentityField<'a> { Missing, Invalid, Text(&'a str) }
 
 pub enum RowIdentity<'a> { Id(&'a str), Path(&'a str), Retirement(&'a str, &'a str) }
 
+/// A decoded pointer component selects every child for "*" and otherwise only the exact key.
+pub fn matches_child(token: &str, key: &str) -> (selected: bool)
+    ensures selected == (token@ == "*"@ || token@ == key@),
+{
+    <&str>::exec_eq(token, "*") || <&str>::exec_eq(token, key)
+}
+
+/// A single row with an id or path switches the whole array to stable row identities.
+pub fn requires_row_identity<F: Fn(usize) -> bool>(count: usize, named: F) -> (required: bool)
+    requires forall|i: usize| i < count ==> named.requires((i,)),
+    ensures
+        required ==> exists|i: usize| i < count && named.ensures((i,), true),
+        !required ==> forall|i: usize| i < count ==> named.ensures((i,), false),
+{
+    let mut i = 0;
+    while i < count
+        invariant
+            i <= count,
+            forall|j: usize| j < count ==> named.requires((j,)),
+            forall|j: usize| j < i ==> named.ensures((j,), false),
+        decreases count - i,
+    {
+        if named(i) { return true; }
+        i += 1;
+    }
+    false
+}
+
 pub open spec fn nonempty(field: IdentityField) -> Option<Seq<char>> {
     match field { IdentityField::Text(s) if s@ != ""@ => Some(s@), _ => None }
 }
