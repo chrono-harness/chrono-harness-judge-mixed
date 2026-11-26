@@ -5,7 +5,14 @@ edition = "2024"
 publish = false
 
 [dev-dependencies]
+sha2 = "0.11"
+serde_yaml = { package = "serde_yaml_ng", version = "=0.10.0" }
+toml = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
 vstd = "=0.0.0-2026-04-20-1748"
 chrono-judge-mixed = { path = "../judge-mixed" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[[test]]
+name = "roadmap_adapters"
+path = "../../.chrono-harness/ci/host_adapters.rs"
