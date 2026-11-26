@@ -13,6 +13,51 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn version_and_preparation_require_a_single_argument() {
+    proof { reveal_strlit("--version"); reveal_strlit("prepare-classification-v1"); }
+    expect(matches!(policy::route(None,0),policy::Route::Pipeline));
+    expect(matches!(policy::route(None,2),policy::Route::Pipeline));
+    expect(matches!(policy::route(Some("--version"),0),policy::Route::Version));
+    expect(matches!(policy::route(Some("--version"),1),policy::Route::Pipeline));
+    expect(matches!(policy::route(Some("prepare-classification-v1"),0),policy::Route::Prepare));
+    expect(matches!(policy::route(Some("prepare-classification-v1"),1),policy::Route::Pipeline));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn native_programs_receive_the_exact_prefix_and_original_arguments() {
+    let executable = 42u8;
+    let forwarded = [0xffu8,0,2];
+    let prepare = policy::invocation(true,&executable,"version",&forwarded);
+    expect(<&str>::exec_eq(prepare.program,"chrono-judge-registration"));
+    expect(prepare.forwarded.len()==0 && prepare.prefix.len()==2);
+    use policy::Argument::{Text,Executable};
+    expect(matches!(&prepare.prefix[0],Text(text) if <&str>::exec_eq(text,"classification-inputs-v1")));
+    expect(matches!(&prepare.prefix[1],Executable(path) if **path == 42));
+    let pipeline=policy::invocation(false,&executable,"version",&forwarded);
+    expect(<&str>::exec_eq(pipeline.program,"chrono-harness"));
+    expect(pipeline.prefix.len()==7 && pipeline.forwarded.len()==3);
+    expect(pipeline.forwarded[0]==255 && pipeline.forwarded[1]==0 && pipeline.forwarded[2]==2);
+    expect(matches!(&pipeline.prefix[0],Text(t) if <&str>::exec_eq(t,"judge-pipeline")));
+    expect(matches!(&pipeline.prefix[1],Text(t) if <&str>::exec_eq(t,"chrono-judge-mixed")));
+    expect(matches!(&pipeline.prefix[2],Text(t) if <&str>::exec_eq(t,"version")));
+    expect(matches!(&pipeline.prefix[3],Executable(path) if **path==42));
+    expect(matches!(&pipeline.prefix[4],Text(t) if <&str>::exec_eq(t,"prepare-classification-v1")));
+    expect(matches!(&pipeline.prefix[5],Executable(path) if **path==42));
+    expect(matches!(&pipeline.prefix[6],Text(t) if <&str>::exec_eq(t,"report-v1")));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn process_location_and_returned_exec_preserve_the_actual_error() {
+    let no_path=|| -> (r:Result<u8,u8>) ensures r==Err::<u8,u8>(19), {Err(19)};
+    let path=|| -> (r:Result<u8,u8>) ensures r==Ok::<u8,u8>(47), {Ok(47)};
+    let exec=|p:u8| -> (r:(&'static str,u8)) ensures r.0@=="target"@ && r.1==p, {("target",p)};
+    let (s,n,e)=policy::delegation_failure(no_path,exec);
+    expect(s==2 && <&str>::exec_eq(n,"chrono-judge-mixed") && e==19);
+    let (s,n,e)=policy::delegation_failure(path,exec);
+    expect(s==2 && <&str>::exec_eq(n,"target") && e==47);
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn document_io_returns_the_first_diagnostic_and_requires_a_successful_flush() {
     let failed_read = || -> (r: Result<Vec<u8>,u8>) ensures r == Err::<Vec<u8>,u8>(4), { Err(4) };
     let empty = || -> (r: Result<Vec<u8>,u8>) ensures r matches Ok(v) && v.len() == 0, { Ok(Vec::new()) };
