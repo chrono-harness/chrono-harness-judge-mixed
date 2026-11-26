@@ -17,15 +17,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub(super) fn patterns(&self, other: &Self) -> BTreeSet<(String, String, String)> {
-        self.semantic_fields
-            .iter()
-            .chain(&other.semantic_fields)
-            .flat_map(|rule| {
-                rule.pointers
-                    .iter()
-                    .map(|p| (rule.path.clone(), p.clone(), rule.on.clone()))
-            })
-            .collect()
+        crate::verified_classification::patterns(&self.semantic_fields, &other.semantic_fields)
     }
 
     pub(super) fn validate(&self) -> Result<(), String> {

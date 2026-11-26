@@ -52,6 +52,68 @@ fn delta_compares_every_side_and_preserves_order(a:&[policy::Delta],b:&[policy::
     }
 }
 
+pub struct PairCursor<'a> { pub items:&'a [(&'a String,&'a u8)], pub at:usize }
+
+impl<'a> policy::ObjectCursor<'a,u8> for PairCursor<'a> {
+    open spec fn remaining(&self)->Seq<(&'a String,&'a u8)> {
+        if self.at<=self.items.len() {self.items@.skip(self.at as int)} else {Seq::empty()}
+    }
+    fn next_pair(&mut self)->(entry:Option<(&'a String,&'a u8)>) {
+        if self.at>=self.items.len() {return None;}
+        let item=self.items[self.at];self.at=self.at+1;
+        assert(self.items@.skip(self.at as int) =~= old(self).items@.skip(old(self).at as int).drop_first());
+        Some(item)
+    }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn literal_object_members_skip_non_matches_and_keep_the_recursive_result() {
+    use policy::ObjectCursor;
+    let a=String::from_str("a");let b=String::from_str("b");let x=1u8;let y=2u8;
+    let entries=[(&a,&x),(&b,&y)];
+    let visit=|_k:&String,v:&u8,_s:u8| -> (r:Result<u8,u8>) ensures r==Ok::<u8,u8>(*v), {Ok(*v)};
+    let cursor=PairCursor{items:&entries,at:0};
+    let ghost source=cursor.remaining();
+    let chosen=policy::object_members(cursor,Some("a"),0u8,visit);
+    proof {
+        reveal_strlit("a");reveal_strlit("b");reveal_strlit("*");
+        assert("a"@[0]=='a' && "b"@[0]=='b' && "*"@[0]=='*');
+        assert(source.len()==2);
+        assert(source[0]==entries@[0] && source[1]==entries@[1]);
+        if let Ok(result)=chosen {
+            let trace=choose|states:Seq<u8>| #[trigger] policy::folded(source,2,Some("a"),visit,states)
+                && states[0]==0 && states.last()==result;
+            assert(policy::folded(source,2,Some("a"),visit,trace));
+            assert(policy::accepts_object(Some("a"),source[0].0));
+            assert(!policy::accepts_object(Some("a"),source[1].0));
+            assert(visit.ensures((source[0].0,source[0].1,trace[0]),Ok::<u8,u8>(trace[1])));
+            assert(trace[2]==trace[1]);
+        }
+    }
+    expect(matches!(chosen,Ok(1)));
+}
+
+#[cfg(verus_keep_ghost)]
+fn every_returned_pattern_has_a_nonempty_declaration_at_an_input_endpoint(a:&[policy::Rule],b:&[policy::Rule])
+    requires vstd::laws_cmp::obeys_cmp::<policy::Pattern>(),
+{
+    let result=policy::patterns(a,b);
+    assert forall|p:policy::Pattern| #[trigger] result@.contains(p)==(
+        (exists|i:int,j:int| 0<=i<a.len() && 0<=j<a@[i].pointers.len() &&
+            (#[trigger] a@[i].pointers[j])==p.1 && a@[i].path==p.0 && a@[i].on==p.2)
+        || (exists|i:int,j:int| 0<=i<b.len() && 0<=j<b@[i].pointers.len() &&
+            (#[trigger] b@[i].pointers[j])==p.1 && b@[i].path==p.0 && b@[i].on==p.2)
+    ) by {}
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn blob_presence_is_checked_on_each_side() {
+    expect(policy::documents_available(false,false,false,false));
+    expect(policy::documents_available(true,true,false,false));
+    expect(!policy::documents_available(true,false,true,true));
+    expect(!policy::documents_available(false,true,true,false));
+}
+
 #[cfg_attr(not(verus_keep_ghost),test)]
 fn normalized_arrays_keep_positions_or_exact_row_keys() {
     let vals=vec![3u8,5u8];

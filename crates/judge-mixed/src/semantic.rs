@@ -5,6 +5,15 @@ use crate::verified_classification::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+struct Members<'a>(serde_json::map::Iter<'a>);
+
+impl<'a> crate::verified_classification::ObjectCursor<'a, Value> for Members<'a> {
+    fn next_pair(&mut self) -> Option<(&'a String, &'a Value)> {
+        self.0.next()
+    }
+}
+
 fn child_pointer(parent: &str, key: &str) -> String {
     crate::verified_classification::child_pointer(parent, key)
         .into_iter()
@@ -60,15 +69,19 @@ fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<Stri
 // Kind tags keep user objects distinct from the internal row-map representation.
 fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, String> {
     match value {
-        Value::Object(map) => Ok(json!([
-            "object",
-            map.iter()
-                .map(|(k, v)| Ok((
-                    k.clone(),
-                    normalized(v, &child_pointer(pointer, k), workflow)?
-                )))
-                .collect::<Result<BTreeMap<_, _>, String>>()?
-        ])),
+        Value::Object(map) => {
+            let members = crate::verified_classification::object_members(
+                Members(map.iter()),
+                None,
+                BTreeMap::new(),
+                |key, child, mut members| {
+                    let value = normalized(child, &child_pointer(pointer, key), workflow)?;
+                    members.insert(key, value);
+                    Ok::<_, String>(members)
+                },
+            )?;
+            Ok(json!(["object", members]))
+        }
         Value::Array(rows) => {
             let values = crate::verified_classification::children(rows.len(), |i| {
                 normalized(&rows[i], &child_pointer(pointer, &i.to_string()), workflow)
@@ -107,8 +120,11 @@ fn select(
     };
     match value {
         Value::Object(map) => {
-            for (key, child) in map {
-                if matches_child(token, key) {
+            *out = crate::verified_classification::object_members(
+                Members(map.iter()),
+                Some(token),
+                std::mem::take(out),
+                |key, child, mut entries| {
                     let mut next = identity.clone();
                     next.push(crate::verified_classification::selection_identity(
                         true, key, None,
@@ -119,34 +135,40 @@ fn select(
                         next_depth,
                         child_pointer(&pointer, key),
                         next,
-                        out,
+                        &mut entries,
                         workflow,
                     )?;
-                }
-            }
+                    Ok::<_, String>(entries)
+                },
+            )?;
         }
         Value::Array(rows) => {
             let ids = row_ids(rows, retirement_rows(workflow, &pointer))?;
-            for (i, child) in rows.iter().enumerate() {
-                let index = i.to_string();
-                if matches_child(token, &index) {
-                    let mut next = identity.clone();
-                    next.push(crate::verified_classification::selection_identity(
-                        false,
-                        &index,
-                        ids.as_ref().map(|ids| ids[i].as_str()),
-                    ));
-                    select(
-                        child,
-                        parts,
-                        next_depth,
-                        child_pointer(&pointer, &index),
-                        next,
-                        out,
-                        workflow,
-                    )?;
-                }
-            }
+            *out = crate::verified_classification::indices(
+                rows.len(),
+                std::mem::take(out),
+                |i, mut entries| {
+                    let index = i.to_string();
+                    if matches_child(token, &index) {
+                        let mut next = identity.clone();
+                        next.push(crate::verified_classification::selection_identity(
+                            false,
+                            &index,
+                            ids.as_ref().map(|keys| keys[i].as_str()),
+                        ));
+                        select(
+                            &rows[i],
+                            parts,
+                            next_depth,
+                            child_pointer(&pointer, &index),
+                            next,
+                            &mut entries,
+                            workflow,
+                        )?;
+                    }
+                    Ok::<_, String>(entries)
+                },
+            )?;
         }
         _ => {}
     }
