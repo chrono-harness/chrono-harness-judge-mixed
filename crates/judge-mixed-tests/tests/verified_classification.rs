@@ -13,6 +13,31 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn child_names_are_literal_except_for_the_single_wildcard() {
+    proof {
+        reveal_strlit("*"); reveal_strlit("00"); reveal_strlit("0"); reveal_strlit("");
+        assert("*"@.len() == 1 && "00"@.len() == 2 && "0"@.len() == 1 && ""@.len() == 0);
+    }
+    expect(policy::matches_child("*", ""));
+    expect(policy::matches_child("", ""));
+    expect(policy::matches_child("规则", "规则"));
+    expect(policy::matches_child("0", "0"));
+    expect(!policy::matches_child("00", "0"));
+    expect(!policy::matches_child("", "0"));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn any_named_row_requires_identity_for_the_entire_array() {
+    let missing = |_i: usize| -> (b: bool) ensures !b, { false };
+    let last = |i: usize| -> (b: bool) ensures b == (i == 2), { i == 2 };
+    expect(!policy::requires_row_identity(0, last));
+    expect(!policy::requires_row_identity(3, missing));
+    let required = policy::requires_row_identity(3, last);
+    proof { if !required { assert(last.ensures((2usize,), false)); } }
+    expect(required);
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn semantic_change_modes_compare_existing_fields_and_distinguish_additions() {
     let all = "add-modify-delete";
     let existing = "modify-delete-existing";
