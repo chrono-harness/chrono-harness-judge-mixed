@@ -22,9 +22,8 @@ fn classify_endpoints(
     after: &Documents,
 ) -> Result<Value, String> {
     let patterns = a.patterns(b);
-    let mut changes = BTreeMap::new();
-    let mut products = BTreeMap::new();
-    for d in delta {
+    let accumulated = verified_classification::classified_paths(delta.len(), |i| {
+        let d = &delta[i];
         let old = a.surfaces.get(&d.path).cloned();
         let new = b.surfaces.get(&d.path).cloned();
         let Some(surfaces) = verified_classification::endpoints(old.as_deref(), new.as_deref())
@@ -36,13 +35,13 @@ fn classify_endpoints(
         };
         let mut fields = vec![];
         for (path, pointer, on) in patterns.iter().filter(|(p, _, _)| p == &d.path) {
-            for (exists, docs) in [
-                (d.old_blob.is_some(), before),
-                (d.new_blob.is_some(), after),
-            ] {
-                if exists && !docs.contains_key(path) {
-                    return Err(format!("E_SEMANTIC_INPUT: missing named document {path}"));
-                }
+            if !verified_classification::documents_available(
+                d.old_blob.is_some(),
+                before.contains_key(path),
+                d.new_blob.is_some(),
+                after.contains_key(path),
+            ) {
+                return Err(format!("E_SEMANTIC_INPUT: missing named document {path}"));
             }
             fields.extend(semantic::changes(
                 before.get(path),
@@ -54,16 +53,21 @@ fn classify_endpoints(
             )?);
         }
         let classification = json!({"path":d.path,"before_surface":old,"after_surface":new});
-        if surfaces.product {
-            products.insert(d.path.clone(), classification.clone());
-        }
-        if surfaces.changes_rule(!fields.is_empty()) {
+        let product = surfaces.product.then(|| classification.clone());
+        let rule = surfaces.changes_rule(!fields.is_empty()).then(|| {
             let mut rule = classification;
             rule["whole_file"] = surfaces.whole_rule.into();
             rule["semantic"] = fields.into();
-            changes.insert(d.path.clone(), rule);
-        }
-    }
+            rule
+        });
+        Ok(verified_classification::ClassifiedPath {
+            path: &d.path,
+            rule,
+            product,
+        })
+    })?;
+    let changes = accumulated.rules;
+    let products = accumulated.products;
     Ok(
         json!({"mixed":verified_classification::mixed(changes.len(), products.len()),
         "rule_paths":changes.keys().collect::<Vec<_>>(),"product_paths":products.keys().collect::<Vec<_>>(),

@@ -1014,6 +1014,231 @@ fn add_keys<'a,K:Ord,V>(out:&mut BTreeSet<&'a K>,source:&'a BTreeMap<K,V>)
     }
 }
 
+/// Adapter for serde_json::Map::iter. Its remaining sequence is the external
+/// iterator's ordered (key, value) pairs, including the current next pair.
+pub trait ObjectCursor<'a,V:'a>: Sized {
+    spec fn remaining(&self) -> Seq<(&'a String,&'a V)>;
+    fn next_pair(&mut self) -> (entry:Option<(&'a String,&'a V)>)
+        ensures match entry {
+            None => old(self).remaining().len()==0,
+            Some(pair) => old(self).remaining().len()>0 && pair == old(self).remaining()[0]
+                && self.remaining()==old(self).remaining().drop_first(),
+        };
+}
+
+pub open spec fn accepts_object(token:Option<&str>, key:&String) -> bool {
+    match token { None=>true, Some(s)=>s@=="*"@ || s@==key@ }
+}
+
+pub open spec fn folded<'a,V,S,E,F:Fn(&'a String,&'a V,S)->Result<S,E>>(
+    items:Seq<(&'a String,&'a V)>, n:int, token:Option<&str>, step:F, states:Seq<S>,
+) -> bool {
+    &&& 0<=n<=items.len() && states.len()==n+1
+    &&& forall|i:int| #![trigger items[i],states[i]] 0<=i<n ==> if accepts_object(token,items[i].0) {
+        step.ensures((items[i].0,items[i].1,states[i]),Ok::<S,E>(states[i+1]))
+    } else {states[i+1]==states[i]}
+}
+
+/// Normalization walks every member; selection walks only exact or wildcard
+/// matches. Passing the state by value preserves every accepted child update.
+pub fn object_members<'a,V:'a,I,S,E,F>(source:I, token:Option<&str>, initial:S, visit:F)
+    -> (out:Result<S,E>)
+    where I:ObjectCursor<'a,V>, F:Fn(&'a String,&'a V,S)->Result<S,E>,
+    requires forall|k:&'a String,v:&'a V,s:S| visit.requires((k,v,s)),
+    ensures match out {
+        Ok(end)=>exists|states:Seq<S>| #[trigger] folded(source.remaining(),source.remaining().len() as int,token,visit,states)
+            && states[0]==initial && states.last()==end,
+        Err(error)=>exists|i:int,states:Seq<S>| 0<=i<source.remaining().len()
+            && #[trigger] folded(source.remaining(),i,token,visit,states) && states[0]==initial
+            && accepts_object(token,source.remaining()[i].0)
+            && visit.ensures((source.remaining()[i].0,source.remaining()[i].1,states.last()),Err::<S,E>(error)),
+    },
+{
+    let ghost all=source.remaining();
+    let mut cursor=source;
+    let ghost mut index:int=0;
+    let ghost mut states=seq![initial];
+    let mut state=initial;
+    loop
+        invariant all==source.remaining(), 0<=index<=all.len(), cursor.remaining()==all.skip(index),
+            folded(all,index,token,visit,states),states[0]==initial,states.last()==state,
+            forall|k:&'a String,v:&'a V,s:S| visit.requires((k,v,s)),
+        decreases all.len()-index,
+    {
+        let (key,child)=match cursor.next_pair() {
+            None=>{assert(index==all.len());assert(folded(source.remaining(),source.remaining().len() as int,token,visit,states));return Ok(state)},
+            Some(pair)=>pair,
+        };
+        assert((key,child)==all[index]);
+        let selected=match token {None=>true,Some(t)=>matches_child(t,key.as_str())};
+        if selected {
+            state=match visit(key,child,state) {
+                Ok(next)=>next,
+                Err(e)=>{assert(visit.ensures((all[index].0,all[index].1,states.last()),Err::<S,E>(e)));assert(folded(source.remaining(),index,token,visit,states));return Err(e)},
+            };
+        }
+        proof {
+            let extended=states.push(state);
+            assert(folded(all,index+1,token,visit,extended)) by {
+                assert forall|i:int| 0<=i<index+1 implies
+                    if accepts_object(token,all[i].0) { visit.ensures((all[i].0,all[i].1,extended[i]),Ok::<S,E>(#[trigger] extended[i+1])) }
+                    else { #[trigger] extended[i+1]==extended[i] } by {
+                    if i<index {assert(extended[i+1]==states[i+1]);}
+                }
+            }
+            states=extended;
+            index=index+1;
+            assert(cursor.remaining() =~= all.skip(index));
+        }
+    }
+}
+
+pub open spec fn applied<S,E,F:Fn(usize,S)->Result<S,E>>(n:int,visit:F,states:Seq<S>) -> bool {
+    states.len()==n+1 && forall|i:usize| i<n ==> visit.ensures((i,states[i as int]),Ok::<S,E>(#[trigger] states[i+1]))
+}
+
+pub fn indices<S,E,F>(count:usize, initial:S, visit:F) -> (out:Result<S,E>)
+    where F:Fn(usize,S)->Result<S,E>,
+    requires forall|i:usize,s:S| i<count ==> visit.requires((i,s)),
+    ensures match out {
+        Ok(end)=>exists|states:Seq<S>| #[trigger] applied(count as int,visit,states) && states[0]==initial && states.last()==end,
+        Err(e)=>exists|i:usize,states:Seq<S>| i<count && #[trigger] applied(i as int,visit,states)
+            && states[0]==initial && visit.ensures((i,states.last()),Err::<S,E>(e)),
+    },
+{
+    let mut state=initial;let ghost mut states=seq![initial];let mut i=0;
+    while i<count
+        invariant i<=count,applied(i as int,visit,states),states[0]==initial,states.last()==state,
+            forall|j:usize,s:S| j<count ==> visit.requires((j,s)),
+        decreases count-i,
+    {
+        state=match visit(i,state) {
+            Ok(v)=>v,
+            Err(e)=>{assert(applied(i as int,visit,states));return Err(e)}
+        };
+        proof {
+            let extended=states.push(state);
+            assert forall|j:usize| j<i+1 implies visit.ensures((j,extended[j as int]),Ok::<S,E>(#[trigger] extended[j+1])) by {
+                if j<i {assert(extended[j+1]==states[j+1]);}
+            }
+            states=extended;
+        }
+        i+=1;
+    }
+    Ok(state)
+}
+
+pub struct ClassifiedPath<'a,R,P> {
+    pub path:&'a String, pub rule:Option<R>, pub product:Option<P>,
+}
+
+pub struct ClassifiedPaths<'a,R,P> {
+    pub rules:BTreeMap<&'a String,R>,
+    pub products:BTreeMap<&'a String,P>,
+}
+
+pub open spec fn rule_map<'a,R,P>(rows:Seq<ClassifiedPath<'a,R,P>>) -> Map<&'a String,R>
+    decreases rows.len(),
+{
+    if rows.len()==0 {Map::empty()} else {
+        let previous=rule_map(rows.drop_last());let row=rows.last();
+        match row.rule { Some(r)=>previous.insert(row.path,r),None=>previous }
+    }
+}
+
+pub open spec fn product_map<'a,R,P>(rows:Seq<ClassifiedPath<'a,R,P>>) -> Map<&'a String,P>
+    decreases rows.len(),
+{
+    if rows.len()==0 {Map::empty()} else {
+        let previous=product_map(rows.drop_last());let row=rows.last();
+        match row.product { Some(p)=>previous.insert(row.path,p),None=>previous }
+    }
+}
+
+/// Consume each actual DELTA row once, preserving the first diagnostic.
+pub fn classified_paths<'a,R,P,E,F>(n:usize, classify:F) -> (result:Result<ClassifiedPaths<'a,R,P>,E>)
+    where F:Fn(usize)->Result<ClassifiedPath<'a,R,P>,E>,
+    requires forall|i:usize| i<n ==> classify.requires((i,)), vstd::laws_cmp::obeys_cmp::<&String>(),
+    ensures match result {
+        Ok(out) => exists|rows:Seq<ClassifiedPath<'a,R,P>>| #[trigger] processed(classify,rows,n as int)
+            && out.rules@==rule_map(rows) && out.products@==product_map(rows),
+        Err(e) => exists|i:usize,rows:Seq<ClassifiedPath<'a,R,P>>| i<n && #[trigger] processed(classify,rows,i as int)
+            && classify.ensures((i,),Err::<ClassifiedPath<'a,R,P>,E>(e)),
+    },
+{
+    let mut rules=BTreeMap::new();let mut products=BTreeMap::new();
+    let ghost mut rows:Seq<ClassifiedPath<'a,R,P>>=Seq::empty();
+    let mut i=0;
+    while i<n
+        invariant i<=n,processed(classify,rows,i as int),rules@==rule_map(rows),products@==product_map(rows),
+            forall|j:usize| j<n ==> classify.requires((j,)),vstd::laws_cmp::obeys_cmp::<&String>(),
+        decreases n-i,
+    {
+        let row=match classify(i) {
+            Ok(row)=>row,Err(e)=>{assert(processed(classify,rows,i as int));return Err(e)}
+        };
+        let ghost extended=rows.push(row);
+        assert(extended.drop_last() =~= rows);
+        if let Some(r)=row.rule {rules.insert(row.path,r);}
+        if let Some(p)=row.product {products.insert(row.path,p);}
+        proof {rows=extended;}
+        i+=1;
+    }
+    Ok(ClassifiedPaths{rules,products})
+}
+
+pub fn documents_available(old_blob:bool, old_doc:bool, new_blob:bool, new_doc:bool) -> (valid:bool)
+    ensures valid==((!old_blob || old_doc) && (!new_blob || new_doc)),
+{ (!old_blob || old_doc) && (!new_blob || new_doc) }
+
+pub type Pattern=(String,String,String);
+
+pub open spec fn registered(rules:Seq<Rule>,n:int,p:Pattern) -> bool {
+    exists|i:int,j:int| 0<=i<n && 0<=j<rules[i].pointers.len()
+        && (#[trigger] rules[i].pointers[j])==p.1 && rules[i].path==p.0 && rules[i].on==p.2
+}
+
+fn add_patterns(out:&mut BTreeSet<Pattern>,rules:&[Rule])
+    requires vstd::laws_cmp::obeys_cmp::<Pattern>(),
+    ensures forall|p:Pattern| #[trigger] out@.contains(p)==(old(out)@.contains(p)||registered(rules@,rules.len() as int,p)),
+{
+    let mut i=0;
+    while i<rules.len()
+        invariant i<=rules.len(),vstd::laws_cmp::obeys_cmp::<Pattern>(),forall|p:Pattern| #[trigger] out@.contains(p)==(old(out)@.contains(p)||registered(rules@,i as int,p)),
+        decreases rules.len()-i,
+    {
+        let r=&rules[i];
+        let ghost before=out@;
+        let mut j=0;
+        while j<r.pointers.len()
+            invariant j<=r.pointers.len(),vstd::laws_cmp::obeys_cmp::<Pattern>(),
+                forall|p:Pattern| #[trigger] out@.contains(p)==(before.contains(p) ||
+                    (p.0==r.path && p.2==r.on && exists|k:int| 0<=k<j && #[trigger] r.pointers[k]==p.1)),
+            decreases r.pointers.len()-j,
+        {
+            out.insert((r.path.clone(),r.pointers[j].clone(),r.on.clone()));
+            assert forall|p:Pattern| #[trigger] out@.contains(p)==(before.contains(p) ||
+                (p.0==r.path && p.2==r.on && exists|k:int| 0<=k<j+1 && #[trigger] r.pointers[k]==p.1)) by {
+                if p.1==r.pointers[j as int] { assert(r.pointers[j as int]==p.1); }
+            }
+            j+=1;
+        }
+        assert forall|p:Pattern| #[trigger] out@.contains(p)==(old(out)@.contains(p)||registered(rules@,i+1,p)) by {
+            if p.0==r.path && p.2==r.on && exists|k:int| 0<=k<j && #[trigger] r.pointers[k]==p.1 {
+                let k=choose|k:int| 0<=k<j && #[trigger] r.pointers[k]==p.1;assert(rules@[i as int].pointers[k]==p.1);
+            }
+        }
+        i+=1;
+    }
+}
+
+pub fn patterns(before:&[Rule],after:&[Rule]) -> (out:BTreeSet<Pattern>)
+    requires vstd::laws_cmp::obeys_cmp::<Pattern>(),
+    ensures forall|p:Pattern| #[trigger] out@.contains(p) == (registered(before@,before.len() as int,p)||registered(after@,after.len() as int,p)),
+{
+    let mut set=BTreeSet::new();add_patterns(&mut set,before);add_patterns(&mut set,after);set
+}
+
 pub fn new_row<K: Ord>(seen: &mut BTreeSet<K>, id: K) -> (fresh: bool)
     requires vstd::laws_cmp::obeys_cmp::<K>(),
     ensures fresh == !old(seen)@.contains(id), seen@ == old(seen)@.insert(id),
