@@ -54,6 +54,27 @@
       }
     },
     {
+      "path": ".chrono-harness/ci/host_adapters.rs",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
+    },
+    {
       "path": ".chrono-harness/ci/install.sh",
       "owner": "host",
       "surface": "product",
@@ -123,7 +144,16 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
     },
     {
       "path": ".chrono-harness/judges.json",
@@ -236,7 +266,16 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
     },
     {
       "path": ".config/mise/conf.d/selected-chrono-harness.toml",
@@ -248,7 +287,16 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
     },
     {
       "path": ".github/ISSUE_TEMPLATE/bug.yml",
@@ -321,7 +369,37 @@
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
-      "edges": []
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/workflows/actions.lock",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".github/workflows/check.yml",
@@ -333,7 +411,11 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".github/workflows/dependabot-auto-merge.yml",
@@ -351,7 +433,21 @@
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
-      "edges": []
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.roadmap-adapters"
+          }
+        ]
+      }
     },
     {
       "path": ".github/workflows/release.yml",
@@ -681,6 +777,7 @@
       "operations": [
         "verify.mixed-classification",
         "verify.mixed-classification-tests",
+        "verify.roadmap-adapters",
         "judge-mixed.owner-check"
       ],
       "timeout_seconds": 600,
