@@ -52,10 +52,13 @@ jobs:
           cargo build --release --locked --manifest-path crates/judge-mixed/Cargo.toml
           binary="$CARGO_TARGET_DIR/release/chrono-judge-mixed"
           tag_version=${GITHUB_REF_NAME#v}
-          env PATH= "$binary" --version | grep -Fx "chrono-judge-mixed ${tag_version%%-*}"
+          env PATH= "$binary" --version > "$RUNNER_TEMP/version"
           query='{"base":{"workflow":"w","surfaces":{},"semantic_fields":[]},"candidate":{"workflow":"w","surfaces":{},"semantic_fields":[]},"delta":[],"before":{},"after":{}}'
-          env PATH= "$binary" classify-v1 <<< "$query" | jq -e '.mixed == false and .rule_paths == [] and .product_paths == []'
-          env PATH= "$binary" document-paths-v1 <<< '{"base":[],"candidate":[],"delta":[]}' | jq -e '. == {"base":[],"candidate":[]}'
+          env PATH= "$binary" classify-v1 <<< "$query" > "$RUNNER_TEMP/classification"
+          env PATH= "$binary" document-paths-v1 <<< '{"base":[],"candidate":[],"delta":[]}' > "$RUNNER_TEMP/documents"
+          cargo run --quiet --locked --release --manifest-path crates/judge-mixed-tests/Cargo.toml \
+            --example release_observation -- "chrono-judge-mixed ${tag_version%%-*}" \
+            "$RUNNER_TEMP/version" "$RUNNER_TEMP/classification" "$RUNNER_TEMP/documents"
           mkdir "$RUNNER_TEMP/dist"
           cp "$CARGO_TARGET_DIR/release/chrono-judge-mixed" "$RUNNER_TEMP/dist/chrono-judge-mixed-$PLATFORM"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

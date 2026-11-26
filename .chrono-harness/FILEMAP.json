@@ -332,7 +332,16 @@
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
-      "edges": []
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".gitignore",
@@ -410,6 +419,27 @@
           "to": "test:judge-mixed-tests"
         }
       ]
+    },
+    {
+      "path": "crates/judge-mixed-tests/examples/release_observation.rs",
+      "owner": "judge-mixed-tests",
+      "surface": "test",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-mixed-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed-tests/tests/mixed.rs",
