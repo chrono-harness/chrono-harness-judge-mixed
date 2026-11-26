@@ -18,25 +18,29 @@ struct PlanInput {
 
 pub fn plan(input: impl Read) -> Result<Value, String> {
     let q: PlanInput = classification::read(input)?;
-    q.base.validate()?;
-    q.candidate.validate()?;
-    if q.impact["schema"] != "chrono-filemap-impact/v6" {
-        return Err("E_IMPACT: unsupported schema".into());
-    }
-    let delta: Vec<Delta> =
-        serde_json::from_value(q.impact["delta"].clone()).map_err(|e| format!("E_IMPACT: {e}"))?;
+    use crate::verified_classification::{PlanFailure, bound_plan, plan_delta, same_delta};
+    let delta = plan_delta(
+        &q.base.surfaces,
+        &q.base.semantic_fields,
+        &q.candidate.surfaces,
+        &q.candidate.semantic_fields,
+        q.impact["schema"].as_str(),
+        || serde_json::from_value(q.impact["delta"].clone()),
+    )
+    .map_err(|failure| match failure {
+        PlanFailure::Contract(reason) => reason.to_owned(),
+        PlanFailure::Decode(error) => format!("E_IMPACT: {error}"),
+    })?;
     let costs = crate::verified_classification::plan_predecessors(
         q.prior_impacts.len(),
         |i| q.prior_impacts[i] == q.impact,
-        || delta == q.delta,
+        || same_delta(&delta, &q.delta),
         &q.prior_costs,
         |i| q.prior_costs[i] == q.prior_costs[0],
         || q.prior_costs[0]["binding"] == q.binding,
     )?;
     let paths = classification::endpoint_paths(&q.base, &q.candidate, &q.delta);
-    Ok(
-        json!({"base":paths.base,"candidate":paths.candidate,"context":{"binding":q.binding,"costs":costs}}),
-    )
+    serde_json::to_value(bound_plan(paths, &q.binding, costs)).map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]

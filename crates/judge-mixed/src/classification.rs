@@ -12,7 +12,7 @@ use std::io::Read;
 pub struct Endpoint {
     pub(super) workflow: String,
     pub(super) surfaces: BTreeMap<String, String>,
-    semantic_fields: Vec<Rule>,
+    pub(super) semantic_fields: Vec<Rule>,
 }
 
 impl Endpoint {
@@ -29,29 +29,8 @@ impl Endpoint {
     }
 
     pub(super) fn validate(&self) -> Result<(), String> {
-        if self.surfaces.values().any(|s| {
-            !matches!(
-                s.as_str(),
-                "product"
-                    | "test"
-                    | "documentation"
-                    | "membership"
-                    | "instruction-policy"
-                    | "judge-policy"
-                    | "judge-implementation"
-            )
-        }) {
-            return Err("E_SURFACE_REFERENCE: unknown surface".into());
-        }
-        if self.semantic_fields.iter().any(|r| {
-            !matches!(
-                r.on.as_str(),
-                "add-modify-delete" | "modify-delete-existing"
-            )
-        }) {
-            return Err("E_SEMANTIC_INPUT: unknown semantic change mode".into());
-        }
-        Ok(())
+        crate::verified_classification::validate_endpoint(&self.surfaces, &self.semantic_fields)
+            .map_err(String::from)
     }
 }
 
