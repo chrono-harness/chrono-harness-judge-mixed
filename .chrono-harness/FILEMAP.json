@@ -277,6 +277,13 @@
       "edges": []
     },
     {
+      "path": ".github/roadmap.cjs",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": []
+    },
+    {
       "path": ".github/workflows/check.yml",
       "owner": "host",
       "surface": "product",
@@ -287,6 +294,13 @@
           "to": "test:judge-mixed-tests"
         }
       ]
+    },
+    {
+      "path": ".github/workflows/issue-roadmap.yml",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": []
     },
     {
       "path": ".github/workflows/release.yml",

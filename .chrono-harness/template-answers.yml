@@ -24,6 +24,8 @@ features:
 - verus
 - diagnostics
 generate_check: false
+manage_roadmap: true
+publisher_workflow: Release chrono-judge-mixed
 project_guide: ''
 repository: chrono-harness/chrono-harness-judge-mixed
 required_check: check
