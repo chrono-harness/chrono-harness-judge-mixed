@@ -11,7 +11,23 @@ use vstd::string::StringExecFns;
 #[cfg(verus_keep_ghost)]
 use vstd::vpanic as panic;
 
+#[path = "../examples/release_observation.rs"]
+mod release_observation;
+
 verus! {
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn release_requires_every_reported_observation() {
+    expect(release_observation::accepts(true,Some(false),true,true,2,true,true));
+    expect(!release_observation::accepts(false,Some(false),true,true,2,true,true));
+    expect(!release_observation::accepts(true,Some(true),true,true,2,true,true));
+    expect(!release_observation::accepts(true,None,true,true,2,true,true));
+    expect(!release_observation::accepts(true,Some(false),false,true,2,true,true));
+    expect(!release_observation::accepts(true,Some(false),true,false,2,true,true));
+    expect(!release_observation::accepts(true,Some(false),true,true,3,true,true));
+    expect(!release_observation::accepts(true,Some(false),true,true,2,false,true));
+    expect(!release_observation::accepts(true,Some(false),true,true,2,true,false));
+}
+
 #[cfg_attr(not(verus_keep_ghost),test)]
 fn both_document_sides_and_all_projected_changes_survive()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
