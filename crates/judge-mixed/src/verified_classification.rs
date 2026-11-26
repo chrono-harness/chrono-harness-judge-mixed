@@ -311,6 +311,134 @@ pub fn field_changed(
     !after || !equal_values
 }
 
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Deserialize))]
+#[cfg_attr(not(verus_keep_ghost), serde(deny_unknown_fields))]
+pub struct Rule {
+    pub path: String,
+    pub pointers: Vec<String>,
+    pub on: String,
+}
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize, serde::Deserialize, PartialEq, Eq))]
+#[cfg_attr(not(verus_keep_ghost), serde(deny_unknown_fields))]
+pub struct Delta {
+    pub kind: String,
+    pub path: String,
+    pub old_blob: Option<String>,
+    pub new_blob: Option<String>,
+    pub old_mode: Option<String>,
+    pub new_mode: Option<String>,
+}
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]
+pub struct DocumentPaths<'a> {
+    pub base: BTreeSet<&'a String>,
+    pub candidate: BTreeSet<&'a String>,
+}
+
+pub open spec fn named_by(rules: Seq<Rule>, end: int, path: &String) -> bool {
+    exists|i: int| 0 <= i < end && #[trigger] rules[i].path == *path && rules[i].pointers.len() > 0
+}
+
+pub open spec fn present_on(delta: Seq<Delta>, end: int, path: &String, base: bool) -> bool {
+    exists|i: int| 0 <= i < end && #[trigger] delta[i].path == *path
+        && (if base { delta[i].old_blob.is_some() } else { delta[i].new_blob.is_some() })
+}
+
+fn register_rules<'a>(named: &mut BTreeSet<&'a String>, rules: &'a [Rule])
+    requires vstd::laws_cmp::obeys_cmp::<&String>(),
+    ensures forall|p: &String| #[trigger] named@.contains(p)
+        == (old(named)@.contains(p) || named_by(rules@, rules.len() as int, p)),
+{
+    let mut i = 0;
+    while i < rules.len()
+        invariant i <= rules.len(), vstd::laws_cmp::obeys_cmp::<&String>(),
+            forall|p: &String| #[trigger] named@.contains(p)
+                == (old(named)@.contains(p) || named_by(rules@, i as int, p)),
+        decreases rules.len() - i,
+    {
+        let rule = &rules[i];
+        register_document(named, &rule.path, rule.pointers.len());
+        assert forall|p: &String| #[trigger] named@.contains(p)
+            == (old(named)@.contains(p) || named_by(rules@, i+1, p)) by {
+            if p == &rule.path && rule.pointers.len() > 0 { assert(rules@[i as int].path == *p); }
+        }
+        i += 1;
+    }
+}
+
+pub fn required_paths<'a>(base: &'a [Rule], candidate: &'a [Rule], delta: &'a [Delta])
+    -> (paths: DocumentPaths<'a>)
+    requires vstd::laws_cmp::obeys_cmp::<&String>(),
+    ensures
+        forall|p: &String| #[trigger] paths.base@.contains(p)
+            == ((named_by(base@, base.len() as int, p) || named_by(candidate@, candidate.len() as int, p))
+                && present_on(delta@, delta.len() as int, p, true)),
+        forall|p: &String| #[trigger] paths.candidate@.contains(p)
+            == ((named_by(base@, base.len() as int, p) || named_by(candidate@, candidate.len() as int, p))
+                && present_on(delta@, delta.len() as int, p, false)),
+{
+    let mut named = BTreeSet::new();
+    register_rules(&mut named, base);
+    register_rules(&mut named, candidate);
+    let mut before = BTreeSet::new();
+    let mut after = BTreeSet::new();
+    let mut i = 0;
+    while i < delta.len()
+        invariant i <= delta.len(), vstd::laws_cmp::obeys_cmp::<&String>(),
+            forall|p: &String| #[trigger] named@.contains(p)
+                == (named_by(base@, base.len() as int, p) || named_by(candidate@, candidate.len() as int, p)),
+            forall|p: &String| #[trigger] before@.contains(p) == (named@.contains(p) && present_on(delta@, i as int, p, true)),
+            forall|p: &String| #[trigger] after@.contains(p) == (named@.contains(p) && present_on(delta@, i as int, p, false)),
+        decreases delta.len() - i,
+    {
+        let row = &delta[i];
+        select_document(&named, &mut before, &mut after, &row.path, row.old_blob.is_some(), row.new_blob.is_some());
+        assert forall|p: &String| #[trigger] before@.contains(p) == (named@.contains(p) && present_on(delta@, i+1, p, true)) by {
+            if p == &row.path && row.old_blob.is_some() { assert(delta@[i as int].path == *p); }
+        }
+        assert forall|p: &String| #[trigger] after@.contains(p) == (named@.contains(p) && present_on(delta@, i+1, p, false)) by {
+            if p == &row.path && row.new_blob.is_some() { assert(delta@[i as int].path == *p); }
+        }
+        i += 1;
+    }
+    DocumentPaths { base: before, candidate: after }
+}
+
+pub enum DataCommand { Classify, Documents, Plan, Report }
+
+pub fn data_command(name: &str, extra: usize) -> (selected: Option<Result<DataCommand, &str>>)
+    ensures
+        selected.is_some() == (name@ == "classify-v1"@ || name@ == "document-paths-v1"@
+            || name@ == "plan-classification-v1"@ || name@ == "report-v1"@),
+        selected matches Some(Err(command)) ==> extra > 0 && command@ == name@,
+        selected matches Some(Ok(command)) ==> extra == 0 && match command {
+            DataCommand::Classify => name@ == "classify-v1"@,
+            DataCommand::Documents => name@ == "document-paths-v1"@,
+            DataCommand::Plan => name@ == "plan-classification-v1"@,
+            DataCommand::Report => name@ == "report-v1"@,
+        },
+{
+    let command = if <&str>::exec_eq(name, "classify-v1") {
+        DataCommand::Classify
+    } else if <&str>::exec_eq(name, "document-paths-v1") {
+        DataCommand::Documents
+    } else if <&str>::exec_eq(name, "plan-classification-v1") {
+        DataCommand::Plan
+    } else if <&str>::exec_eq(name, "report-v1") {
+        DataCommand::Report
+    } else {
+        return None;
+    };
+    Some(if extra == 0 { Ok(command) } else { Err(name) })
+}
+
+pub const INPUT_LIMIT: usize = 64 * 1024 * 1024;
+
+pub fn admits_input(bytes: usize) -> (allowed: bool)
+    ensures allowed == (bytes <= 67_108_864),
+{ bytes <= INPUT_LIMIT }
+
 /// A rule on either endpoint names a document only when it selects a field.
 pub fn register_document<K: Ord>(named: &mut BTreeSet<K>, path: K, pointers: usize)
     requires vstd::laws_cmp::obeys_cmp::<K>(),

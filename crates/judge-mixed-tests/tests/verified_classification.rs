@@ -13,6 +13,44 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn document_command_is_selected_only_without_extra_arguments() {
+    proof {
+        reveal_strlit("document-paths-v1"); reveal_strlit("classify-v1");
+        reveal_strlit("report-v1"); reveal_strlit("plan-classification-v1");
+    }
+    expect(matches!(policy::data_command("document-paths-v1", 0), Some(Ok(policy::DataCommand::Documents))));
+    match policy::data_command("document-paths-v1", 1) {
+        Some(Err(label)) => expect(<&str>::exec_eq(label, "document-paths-v1")),
+        _ => expect(false),
+    }
+}
+
+/// Field values taken from the actual two request arrays must name every path
+/// with a declaration and every blob on that side, including repeated paths.
+#[cfg(verus_keep_ghost)]
+fn complete_document_paths_have_no_missing_or_extra_members<'a>(
+    base: &'a [policy::Rule], candidate: &'a [policy::Rule], delta: &'a [policy::Delta],
+)
+    requires vstd::laws_cmp::obeys_cmp::<&String>(),
+{
+    let paths = policy::required_paths(base, candidate, delta);
+    assert forall|path: &String| {
+        let declared = (exists|i: int| 0 <= i < base.len() && #[trigger] base@[i].path == *path && base@[i].pointers.len() != 0)
+            || (exists|i: int| 0 <= i < candidate.len() && #[trigger] candidate@[i].path == *path && candidate@[i].pointers.len() != 0);
+        let before = exists|i: int| 0 <= i < delta.len() && #[trigger] delta@[i].path == *path && delta@[i].old_blob.is_some();
+        let after = exists|i: int| 0 <= i < delta.len() && #[trigger] delta@[i].path == *path && delta@[i].new_blob.is_some();
+        &&& #[trigger] paths.base@.contains(path) == (declared && before)
+        &&& #[trigger] paths.candidate@.contains(path) == (declared && after)
+    } by {}
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn one_json_value_can_fill_the_entire_input_limit() {
+    expect(policy::admits_input(67_108_864));
+    expect(!policy::admits_input(67_108_865));
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn pointer_components_and_physical_keys_use_the_two_literal_escapes() {
     let text = "/~1";
     proof {
