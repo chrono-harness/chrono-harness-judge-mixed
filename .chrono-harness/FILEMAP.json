@@ -432,7 +432,11 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-mixed-tests/Cargo.toml",
@@ -444,7 +448,11 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-mixed-tests/examples/release_observation.rs",
@@ -510,7 +518,11 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-mixed/Cargo.toml",
@@ -522,7 +534,11 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-mixed/src/classification.rs",
