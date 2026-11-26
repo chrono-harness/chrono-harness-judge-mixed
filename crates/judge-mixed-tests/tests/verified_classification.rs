@@ -12,6 +12,53 @@ use vstd::vpanic as panic;
 
 verus! {
 
+#[cfg(verus_keep_ghost)]
+fn plan_checks_whole_endpoint_before_schema_or_deserialization(
+    a: &std::collections::BTreeMap<String,String>, ar: &[policy::Rule],
+    b: &std::collections::BTreeMap<String,String>, br: &[policy::Rule],
+)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    let fail=|| -> (r:Result<Vec<policy::Delta>,u8>) ensures r==Err::<Vec<policy::Delta>,u8>(17), {Err(17)};
+    let bad = policy::plan_delta(a,ar,b,br,None,fail);
+    let ghost good_a=policy::valid_surfaces(a@) && policy::valid_modes(ar@);
+    let ghost good_b=policy::valid_surfaces(b@) && policy::valid_modes(br@);
+    proof {
+        if good_a && good_b {
+            assert(bad matches Err(policy::PlanFailure::Contract(e)) && e@=="E_IMPACT: unsupported schema"@);
+        }
+        if !policy::valid_surfaces(a@) || (good_a && !policy::valid_surfaces(b@)) {
+            assert(bad matches Err(policy::PlanFailure::Contract(e)) && e@=="E_SURFACE_REFERENCE: unknown surface"@);
+        }
+        if policy::valid_surfaces(a@) && !policy::valid_modes(ar@) {
+            assert(bad matches Err(policy::PlanFailure::Contract(e)) && e@=="E_SEMANTIC_INPUT: unknown semantic change mode"@);
+        }
+    }
+    let parsed=policy::plan_delta(a,ar,b,br,Some("chrono-filemap-impact/v6"),fail);
+    proof { if good_a && good_b {assert(parsed matches Err(policy::PlanFailure::Decode(17u8)));} }
+}
+
+#[cfg(verus_keep_ghost)]
+fn delta_compares_every_side_and_preserves_order(a:&[policy::Delta],b:&[policy::Delta]) {
+    let same=policy::same_delta(a,b);
+    proof {
+        assert(same == (a.len()==b.len() && forall|i:int| 0<=i<a.len() ==> {
+            let left=#[trigger] a@[i]; let right=#[trigger] b@[i];
+            &&& left.kind@ == right.kind@ && left.path@ == right.path@
+            &&& policy::same_text(left.old_blob,right.old_blob) && policy::same_text(left.new_blob,right.new_blob)
+            &&& policy::same_text(left.old_mode,right.old_mode) && policy::same_text(left.new_mode,right.new_mode)
+        }));
+    }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn costs_and_binding_are_distinct_plan_fields() {
+    let documents=policy::DocumentPaths{base:std::collections::BTreeSet::new(),candidate:std::collections::BTreeSet::new()};
+    let binding=5u8; let cost=9u8;
+    let out=policy::bound_plan(documents,&binding,&cost);
+    expect(*out.context.binding==5 && *out.context.costs==9);
+}
+
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn version_and_preparation_require_a_single_argument() {
     proof { reveal_strlit("--version"); reveal_strlit("prepare-classification-v1"); }

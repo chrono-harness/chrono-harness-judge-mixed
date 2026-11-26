@@ -568,6 +568,188 @@ pub fn data_exit<E>(result: Result<(),E>) -> (out: (u8,Option<E>))
     match result { Ok(()) => (0,None), Err(e) => (2,Some(e)) }
 }
 
+pub open spec fn known_surface(value: Seq<char>) -> bool {
+    value == "product"@ || value == "test"@ || value == "documentation"@ || value == "membership"@
+        || value == "instruction-policy"@ || value == "judge-policy"@ || value == "judge-implementation"@
+}
+
+fn admits_surface(s: &str) -> (admitted: bool)
+    ensures admitted == known_surface(s@),
+{
+    <&str>::exec_eq(s,"product") || <&str>::exec_eq(s,"test") || <&str>::exec_eq(s,"documentation")
+        || <&str>::exec_eq(s,"membership") || <&str>::exec_eq(s,"instruction-policy")
+        || <&str>::exec_eq(s,"judge-policy") || <&str>::exec_eq(s,"judge-implementation")
+}
+
+pub open spec fn known_mode(mode: Seq<char>) -> bool {
+    mode == "add-modify-delete"@ || mode == "modify-delete-existing"@
+}
+
+pub open spec fn valid_surfaces(surfaces: Map<String,String>) -> bool {
+    forall|v:String| #[trigger] surfaces.values().contains(v) ==> known_surface(v@)
+}
+
+pub open spec fn valid_modes(rules: Seq<Rule>) -> bool {
+    forall|i:int| 0 <= i < rules.len() ==> known_mode(#[trigger] rules[i].on@)
+}
+
+pub fn validate_endpoint(surfaces: &BTreeMap<String,String>, rules: &[Rule]) -> (r:Result<(),&'static str>)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures match r {
+        Ok(()) => valid_surfaces(surfaces@) && valid_modes(rules@),
+        Err(e) => if valid_surfaces(surfaces@) {
+            !valid_modes(rules@) && e@ == "E_SEMANTIC_INPUT: unknown semantic change mode"@
+        } else { e@ == "E_SURFACE_REFERENCE: unknown surface"@ },
+    },
+{
+    let mut values=surfaces.values();
+    let ghost sequence=values@.1;
+    loop
+        invariant 0<=values@.0<=sequence.len(), values@.1 == sequence, sequence.to_set() == surfaces@.values(),
+             forall|i:int| 0<=i<values@.0 ==> known_surface(#[trigger] sequence[i]@),
+        ensures valid_surfaces(surfaces@),
+        decreases sequence.len()-values@.0,
+    {
+        let ghost previous=values@.0;
+        let value=match values.next() {
+            Some(v)=>v,
+            None=>{
+                assert forall|v:String| #[trigger] surfaces@.values().contains(v) implies known_surface(v@) by {
+                    assert(sequence.contains(v));
+                    let j=choose|j:int| 0<=j<sequence.len() && sequence[j]==v;
+                    assert(known_surface(sequence[j]@));
+                }
+                break
+            }
+        };
+        if !admits_surface(value.as_str()) {
+            assert(sequence[previous] == *value);
+            assert(sequence.contains(*value));
+            assert(surfaces@.values().contains(*value));
+            assert(!valid_surfaces(surfaces@));
+            return Err("E_SURFACE_REFERENCE: unknown surface");
+        }
+    }
+    let mut i=0;
+    while i<rules.len()
+        invariant valid_surfaces(surfaces@), i<=rules.len(), forall|j:int| 0<=j<i ==> known_mode(#[trigger] rules@[j].on@),
+        decreases rules.len()-i,
+    {
+        let s=rules[i].on.as_str();
+        if !(<&str>::exec_eq(s,"add-modify-delete") || <&str>::exec_eq(s,"modify-delete-existing")) {
+            assert(!known_mode(rules@[i as int].on@));
+            return Err("E_SEMANTIC_INPUT: unknown semantic change mode");
+        }
+        i+=1;
+    }
+    Ok(())
+}
+
+pub fn impact_schema(actual: Option<&str>) -> (valid:bool)
+    ensures valid == match actual {Some(s)=>s@=="chrono-filemap-impact/v6"@, None=>false},
+{
+    match actual { Some(s)=><&str>::exec_eq(s,"chrono-filemap-impact/v6"), None=>false }
+}
+
+pub open spec fn same_text(a: Option<String>, b: Option<String>) -> bool {
+    match (a,b) {
+        (None,None) => true,
+        (Some(x),Some(y)) => x@ == y@,
+        _ => false,
+    }
+}
+
+fn same_optional(a: &Option<String>, b: &Option<String>) -> (same: bool)
+    ensures same == same_text(*a,*b),
+{
+    match (a,b) {
+        (None,None) => true,
+        (Some(x),Some(y)) => <&str>::exec_eq(x.as_str(), y.as_str()),
+        _ => false,
+    }
+}
+
+pub open spec fn same_row(a: Delta, b: Delta) -> bool {
+    a.kind@ == b.kind@ && a.path@ == b.path@ && same_text(a.old_blob,b.old_blob)
+        && same_text(a.new_blob,b.new_blob) && same_text(a.old_mode,b.old_mode)
+        && same_text(a.new_mode,b.new_mode)
+}
+
+pub fn same_delta(a: &[Delta], b: &[Delta]) -> (same:bool)
+    ensures same == (a.len() == b.len()
+        && forall|i:int| 0<=i<a.len() ==> same_row(#[trigger] a@[i], #[trigger] b@[i])),
+{
+    if a.len()!=b.len() { return false; }
+    let mut i=0;
+    while i<a.len()
+        invariant i<=a.len(), a.len()==b.len(), forall|j:int| 0<=j<i ==> same_row(#[trigger] a@[j], #[trigger] b@[j]),
+        decreases a.len()-i,
+    {
+        let x=&a[i]; let y=&b[i];
+        if !(<&str>::exec_eq(x.kind.as_str(),y.kind.as_str()) && <&str>::exec_eq(x.path.as_str(),y.path.as_str())
+            && same_optional(&x.old_blob,&y.old_blob) && same_optional(&x.new_blob,&y.new_blob)
+            && same_optional(&x.old_mode,&y.old_mode) && same_optional(&x.new_mode,&y.new_mode)) {
+            assert(!same_row(a@[i as int],b@[i as int]));
+            return false;
+        }
+        i+=1;
+    }
+    true
+}
+
+pub enum PlanFailure<E> { Contract(&'static str), Decode(E) }
+
+/// Validate each entire endpoint, then the schema, before invoking the JSON
+/// adapter. A successful value is the adapter's exact decoded DELTA.
+pub fn plan_delta<E,D>(
+    base_surface:&BTreeMap<String,String>, base_rules:&[Rule],
+    candidate_surface:&BTreeMap<String,String>, candidate_rules:&[Rule],
+    schema:Option<&str>, decode:D,
+) -> (out:Result<Vec<Delta>,PlanFailure<E>>)
+    where D:FnOnce()->Result<Vec<Delta>,E>,
+    requires vstd::laws_cmp::obeys_cmp::<String>(), decode.requires(()),
+    ensures ({
+        let bs=valid_surfaces(base_surface@); let bm=valid_modes(base_rules@);
+        let cs=valid_surfaces(candidate_surface@); let cm=valid_modes(candidate_rules@);
+        let good_schema=match schema { Some(s)=>s@=="chrono-filemap-impact/v6"@, None=>false };
+        if !(bs && bm && cs && cm && good_schema) {
+            out matches Err(PlanFailure::Contract(e)) && (
+                if !bs { e@=="E_SURFACE_REFERENCE: unknown surface"@ }
+                else if !bm { e@=="E_SEMANTIC_INPUT: unknown semantic change mode"@ }
+                else if !cs { e@=="E_SURFACE_REFERENCE: unknown surface"@ }
+                else if !cm { e@=="E_SEMANTIC_INPUT: unknown semantic change mode"@ }
+                else { e@=="E_IMPACT: unsupported schema"@ })
+        } else {
+            match out {
+                Ok(delta)=>decode.ensures((),Ok::<Vec<Delta>,E>(delta)),
+                Err(PlanFailure::Decode(error))=>decode.ensures((),Err::<Vec<Delta>,E>(error)),
+                _=>false,
+            }
+        }
+    }),
+{
+    if let Err(e)=validate_endpoint(base_surface,base_rules) {return Err(PlanFailure::Contract(e));}
+    if let Err(e)=validate_endpoint(candidate_surface,candidate_rules) {return Err(PlanFailure::Contract(e));}
+    if !impact_schema(schema) {return Err(PlanFailure::Contract("E_IMPACT: unsupported schema"));}
+    match decode() { Ok(delta)=>Ok(delta), Err(e)=>Err(PlanFailure::Decode(e)) }
+}
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]
+pub struct PlanContext<'a,T> { pub binding:&'a T, pub costs:&'a T }
+
+#[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]
+pub struct Plan<'a,T> {
+    #[cfg_attr(not(verus_keep_ghost), serde(flatten))]
+    pub paths:DocumentPaths<'a>,
+    pub context:PlanContext<'a,T>,
+}
+
+pub fn bound_plan<'a,T>(paths:DocumentPaths<'a>, binding:&'a T, costs:&'a T) -> (plan:Plan<'a,T>)
+    ensures plan.paths == paths, plan.context.binding == binding, plan.context.costs == costs,
+{
+    Plan { paths,context:PlanContext {binding,costs} }
+}
+
 /// A rule on either endpoint names a document only when it selects a field.
 pub fn register_document<K: Ord>(named: &mut BTreeSet<K>, path: K, pointers: usize)
     requires vstd::laws_cmp::obeys_cmp::<K>(),
