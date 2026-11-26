@@ -13,6 +13,60 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn pointer_components_and_physical_keys_use_the_two_literal_escapes() {
+    let text = "/~1";
+    proof {
+        reveal_strlit("/~1");
+        assert(text@ =~= seq!['/', '~', '1']);
+        assert(policy::scanned(text@, 1).unwrap().current == Seq::<char>::empty());
+        assert(policy::scanned(text@, 2).unwrap().escaped);
+        let s = policy::scanned(text@, 3).unwrap();
+        assert(s.current =~= seq!['/']);
+        assert(s.parts == Seq::<Seq<char>>::empty() && !s.escaped);
+    }
+    match policy::decode_pointer(text) {
+        Ok(parts) => {
+            proof {
+                assert(text@.len() == 3);
+                let s = policy::scanned(text@, 3).unwrap();
+                assert(policy::component_views(parts@) == s.parts.push(s.current));
+                assert(policy::component_views(parts@).len() == parts@.len());
+                assert(s.parts.len() == 0);
+                assert(policy::component_views(parts@)[0] == parts@[0]@);
+            }
+            expect(parts.len() == 1);
+            expect(parts[0].len() == 1 && parts[0][0] == '/');
+        },
+        Err(_) => expect(false),
+    }
+    proof {
+        reveal_strlit("a"); reveal_strlit("~/");
+        assert("a"@ =~= seq!['a']);
+        assert("~/"@ =~= seq!['~', '/']);
+        assert(policy::escaped_prefix("~/"@, 0) == Seq::<char>::empty());
+        assert(policy::escaped_prefix("~/"@, 1) =~= seq!['~', '0']);
+        assert(policy::escaped_prefix("~/"@, 2) =~= seq!['~', '0', '~', '1']);
+    }
+    let path = policy::child_pointer("a", "~/");
+    expect(path.len() == 6);
+    expect(path[0] == 'a' && path[1] == '/' && path[2] == '~' && path[3] == '0'
+        && path[4] == '~' && path[5] == '1');
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn pointer_errors_keep_the_prefix_and_escape_failures_distinct() {
+    proof {
+        reveal_strlit(""); reveal_strlit("x"); reveal_strlit("/~"); reveal_strlit("/~2/a");
+        reveal_with_fuel(policy::scanned, 8);
+    }
+    expect(matches!(policy::decode_pointer(""), Err(policy::PointerError::Prefix)));
+    expect(matches!(policy::decode_pointer("x"), Err(policy::PointerError::Prefix)));
+    expect(matches!(policy::decode_pointer("/~"), Err(policy::PointerError::Escape)));
+    expect(matches!(policy::decode_pointer("/~2/a"), Err(policy::PointerError::Escape)));
+}
+
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn child_names_are_literal_except_for_the_single_wildcard() {
     proof {
         reveal_strlit("*"); reveal_strlit("00"); reveal_strlit("0"); reveal_strlit("");

@@ -220,6 +220,28 @@ fn script_identity_precedes_path_and_actions_added_are_semantic() {
 }
 
 #[test]
+fn physical_pointer_preserves_empty_unicode_and_encoded_literal_escape_sequences() {
+    let mut before = fixture();
+    let pattern = "/空~1鍵//~01~0/*";
+    before.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([{
+        "path": "rules.json", "pointers": [pattern], "on": "modify-delete-existing"
+    }]);
+    before.get_mut(FM).unwrap()["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":"rules.json","surface":"membership"}));
+    before.insert("rules.json".into(), json!({"空/鍵":{"":{"~1~":[1,2]}}}));
+    let mut after = before.clone();
+    after.get_mut("rules.json").unwrap()["空/鍵"][""]["~1~"][1] = 3.into();
+    let result = report(&before, &after, &["rules.json"]).unwrap();
+    let field = &result["changes"][0]["semantic"][0];
+    assert_eq!(field["before"]["pointer"], "/空~1鍵//~01~0/1");
+    assert_eq!(field["after"]["pointer"], "/空~1鍵//~01~0/1");
+    assert_eq!(field["before"]["value"], 2);
+    assert_eq!(field["after"]["value"], 3);
+}
+
+#[test]
 fn explicit_wildcards_escaped_keys_null_removal_and_named_documents() {
     let mut a = fixture();
     a.get_mut(CONFIG).unwrap()["semantic_fields"] = json!([{"path":"rules.json","pointers":["/a~1b/~0key/*/value"],"on":"modify-delete-existing"}]);

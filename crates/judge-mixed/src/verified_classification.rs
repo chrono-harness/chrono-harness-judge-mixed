@@ -76,6 +76,157 @@ pub enum IdentityField<'a> { Missing, Invalid, Text(&'a str) }
 
 pub enum RowIdentity<'a> { Id(&'a str), Path(&'a str), Retirement(&'a str, &'a str) }
 
+/// Views the ordered list of decoded segments, including empty segments.
+pub open spec fn component_views(parts: Seq<Vec<char>>) -> Seq<Seq<char>> {
+    parts.map(|_i: int, part: Vec<char>| part@)
+}
+
+pub ghost struct PointerScan {
+    pub parts: Seq<Seq<char>>,
+    pub current: Seq<char>,
+    pub escaped: bool,
+}
+
+/// State after the leading slash and the next characters, up to end (exclusive).
+pub open spec fn scanned(source: Seq<char>, end: int) -> Option<PointerScan>
+    decreases end,
+{
+    if end <= 1 {
+        Some(PointerScan { parts: Seq::empty(), current: Seq::empty(), escaped: false })
+    } else {
+        match scanned(source, end - 1) {
+            None => None,
+            Some(s) => {
+                let c = source[end - 1];
+                if s.escaped {
+                    if c == '0' || c == '1' {
+                        Some(PointerScan { parts: s.parts, current: s.current.push(
+                            if c == '0' { '~' } else { '/' }), escaped: false })
+                    } else { None }
+                } else if c == '/' {
+                    Some(PointerScan { parts: s.parts.push(s.current), current: Seq::empty(), escaped: false })
+                } else if c == '~' {
+                    Some(PointerScan { parts: s.parts, current: s.current, escaped: true })
+                } else {
+                    Some(PointerScan { parts: s.parts, current: s.current.push(c), escaped: false })
+                }
+            }
+        }
+    }
+}
+
+proof fn invalid_suffix(source: Seq<char>, bad: int, end: int)
+    requires 1 < bad <= end <= source.len(), scanned(source, bad).is_none(),
+    ensures scanned(source, end).is_none(),
+    decreases end - bad,
+{
+    if end > bad { invalid_suffix(source, bad, end - 1); }
+}
+
+pub enum PointerError { Prefix, Escape }
+
+pub fn decode_pointer(pointer: &str) -> (out: Result<Vec<Vec<char>>, PointerError>)
+    ensures match out {
+        Err(PointerError::Prefix) => pointer@.len() == 0 || pointer@[0] != '/',
+        Err(PointerError::Escape) => pointer@.len() > 0 && pointer@[0] == '/' &&
+            match scanned(pointer@, pointer@.len() as int) { None => true, Some(s) => s.escaped },
+        Ok(parts) => pointer@.len() > 0 && pointer@[0] == '/' &&
+            match scanned(pointer@, pointer@.len() as int) {
+                None => false,
+                Some(s) => !s.escaped && component_views(parts@) == s.parts.push(s.current),
+            },
+    },
+{
+    let mut chars = pointer.chars();
+    if chars.next() != Some('/') { return Err(PointerError::Prefix); }
+    let mut parts: Vec<Vec<char>> = Vec::new();
+    let mut current: Vec<char> = Vec::new();
+    let mut escaped = false;
+    loop
+        invariant pointer@.len() > 0, pointer@[0] == '/', chars@.1 == pointer@, 1 <= chars@.0 <= pointer@.len(),
+            scanned(pointer@, chars@.0).is_some(),
+            ({ let s = scanned(pointer@, chars@.0).unwrap();
+               s.parts == component_views(parts@) && s.current == current@ && s.escaped == escaped }),
+        decreases pointer@.len() - chars@.0,
+    {
+        let Some(c) = chars.next() else {
+            if escaped { return Err(PointerError::Escape); }
+            let ghost prior = parts@;
+            parts.push(current);
+            assert(component_views(parts@) =~= component_views(prior).push(current@));
+            return Ok(parts);
+        };
+        if escaped {
+            let decoded = match c {
+                '0' => '~',
+                '1' => '/',
+                _ => {
+                    proof { invalid_suffix(pointer@, chars@.0, pointer@.len() as int); }
+                    return Err(PointerError::Escape);
+                }
+            };
+            current.push(decoded);
+            escaped = false;
+        } else if c == '/' {
+            let ghost prior = parts@;
+            parts.push(current);
+            assert(component_views(parts@) =~= component_views(prior).push(current@));
+            current = Vec::new();
+        } else if c == '~' {
+            escaped = true;
+        } else {
+            current.push(c);
+        }
+    }
+}
+
+pub open spec fn escaped_prefix(key: Seq<char>, end: int) -> Seq<char>
+    decreases end,
+{
+    if end <= 0 { Seq::empty() } else {
+        let prefix = escaped_prefix(key, end - 1);
+        match key[end - 1] {
+            '~' => prefix.push('~').push('0'),
+            '/' => prefix.push('~').push('1'),
+            c => prefix.push(c),
+        }
+    }
+}
+
+/// The parent is already encoded. Only the appended component is escaped.
+pub fn child_pointer(parent: &str, key: &str) -> (out: Vec<char>)
+    ensures out@ == parent@.push('/') + escaped_prefix(key@, key@.len() as int),
+{
+    let mut out = Vec::new();
+    let mut parents = parent.chars();
+    loop
+        invariant parents@.1 == parent@, 0 <= parents@.0 <= parent@.len(),
+            out@ == parent@.take(parents@.0),
+        ensures out@ == parent@,
+        decreases parent@.len() - parents@.0,
+    {
+        let Some(c) = parents.next() else { assert(out@ =~= parent@); break; };
+        out.push(c);
+        assert(out@ =~= parent@.take(parents@.0));
+    }
+    assert(out@ =~= parent@);
+    out.push('/');
+    let mut chars = key.chars();
+    loop
+        invariant chars@.1 == key@, 0 <= chars@.0 <= key@.len(),
+            out@ == parent@.push('/') + escaped_prefix(key@, chars@.0),
+        decreases key@.len() - chars@.0,
+    {
+        let Some(c) = chars.next() else { return out; };
+        match c {
+            '~' => { out.push('~'); out.push('0'); }
+            '/' => { out.push('~'); out.push('1'); }
+            c => out.push(c),
+        }
+        assert(out@ =~= parent@.push('/') + escaped_prefix(key@, chars@.0));
+    }
+}
+
 /// A decoded pointer component selects every child for "*" and otherwise only the exact key.
 pub fn matches_child(token: &str, key: &str) -> (selected: bool)
     ensures selected == (token@ == "*"@ || token@ == key@),
