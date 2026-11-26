@@ -2,11 +2,11 @@
 #![allow(unexpected_cfgs)]
 use std::collections::{BTreeMap, BTreeSet};
 use vstd::contrib::exec_spec::ExecSpecEq;
-use vstd::seq::Seq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
+use vstd::seq::Seq;
 
 verus! {
 
