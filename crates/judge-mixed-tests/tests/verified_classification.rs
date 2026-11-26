@@ -7,6 +7,7 @@ use vstd::contrib::exec_spec::ExecSpecEq;
 use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
+use vstd::string::StringExecFns;
 #[cfg(verus_keep_ghost)]
 use vstd::vpanic as panic;
 
@@ -49,6 +50,78 @@ fn delta_compares_every_side_and_preserves_order(a:&[policy::Delta],b:&[policy::
             &&& policy::same_text(left.old_mode,right.old_mode) && policy::same_text(left.new_mode,right.new_mode)
         }));
     }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn normalized_arrays_keep_positions_or_exact_row_keys() {
+    let vals=vec![3u8,5u8];
+    match policy::array_form(None::<Vec<u64>>,vals) {
+        policy::ArrayForm::Array((tag,v))=>expect(<&str>::exec_eq(tag,"array") && v.len()==2 && v[0]==3 && v[1]==5),
+        _=>expect(false),
+    }
+    let name=8u64;
+    let rows=vec![name];
+    proof {assert(rows@.no_duplicates());}
+    match policy::array_form(Some(rows),vec![4u8]) {
+        policy::ArrayForm::Rows((tag,map))=>{
+            expect(<&str>::exec_eq(tag,"rows"));expect(matches!(map.get(&name),Some(x) if *x==4));
+        },
+        _=>expect(false),
+    }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn each_child_is_visited_in_order_and_only_the_first_error_is_returned() {
+    let first_two=|i:usize| -> (r:Result<usize,u8>) ensures r==(if i<2 {Ok::<usize,u8>(i)} else if i==2 {Err::<usize,u8>(7)} else {Err::<usize,u8>(9)}), {
+        if i<2 {Ok(i)} else if i==2 {Err(7)} else {Err(9)}
+    };
+    match policy::children(2,first_two) {Ok(v)=>expect(v.len()==2 && v[0]==0 && v[1]==1),_=>expect(false)}
+    let r=policy::children(4,first_two);
+    proof {
+        if let Err(e)=r {
+            let (i,prefix)=choose|i:usize,prefix:Seq<usize>| i<4
+                && first_two.ensures((i,),Err::<usize,u8>(e))
+                && #[trigger] policy::processed(first_two,prefix,i as int);
+            if i>2 {assert(first_two.ensures((2usize,),Ok::<usize,u8>(prefix[2])));}
+        } else if let Ok(v)=&r {assert(first_two.ensures((2usize,),Ok::<usize,u8>(v@[2])));}
+    }
+    expect(matches!(r,Err(7)));
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn report_wraps_original_classification_and_both_sets_of_references() {
+    let message=|| -> (v:String) ensures v@=="text"@, {String::from_str("text")};
+    let r=[1u8]; let p=[2u8]; let input=7u8;
+    let output=policy::report_envelope(&r,&p,&input,"HOST",message);
+    expect(<&str>::exec_eq(output.status,"warn") && *output.outputs.rule_changes==7 && output.findings.len()==1);
+    let f=&output.findings[0];expect(<&str>::exec_eq(f.code,"HOST") && <&str>::exec_eq(f.level,"warning"));
+    expect(<&str>::exec_eq(f.message.as_str(),"text") && <&str>::exec_eq(f.causes[0],"/outputs/rule_changes"));
+    expect(f.delta_refs.len()==2 && *f.delta_refs[0]==1 && *f.delta_refs[1]==2);
+    let empty:[u8;0]=[];let output=policy::report_envelope(&r,&empty,&input,"unused",message);
+    expect(<&str>::exec_eq(output.status,"pass") && output.findings.len()==0 && *output.outputs.rule_changes==7);
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn stable_identity_union_and_original_values_survive_comparison() {
+    let mut old=std::collections::BTreeMap::<u64,u8>::new();
+    let mut new=std::collections::BTreeMap::<u64,u8>::new();
+    old.insert(1,7); old.insert(2,8); new.insert(2,9); new.insert(3,7);
+    let key1=1u64; let key2=2u64; let key3=3u64;
+    let keys=policy::selection_keys(&old,&new);
+    proof {
+        assert(keys@ =~= set![&key1,&key2,&key3]);
+        assert(set![&key1,&key2,&key3].len()==3);
+    }
+    expect(keys.len()==3 && keys.contains(&&key1) && keys.contains(&&key2) && keys.contains(&&key3));
+    let eq=|a:&u8,b:&u8| -> (same:bool) ensures same == (*a==*b), { *a==*b };
+    let a=8u8;let b=9u8;
+    match policy::difference(&key2,Some(&a),Some(&b),"add-modify-delete",eq) {
+        Some(d)=>{ expect(*d.key==2); expect(matches!(d.before, Some(x) if *x==8));
+                   expect(matches!(d.after,Some(x) if *x==9)); },
+        None=>expect(false),
+    }
+    expect(policy::difference(&key2,Some(&a),Some(&a),"add-modify-delete",eq).is_none());
+    expect(policy::difference(&key3,None,Some(&b),"modify-delete-existing",eq).is_none());
 }
 
 #[cfg_attr(not(verus_keep_ghost),test)]

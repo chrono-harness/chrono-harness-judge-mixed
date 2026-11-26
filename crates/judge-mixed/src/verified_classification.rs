@@ -7,6 +7,7 @@ use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 use vstd::seq::Seq;
+use vstd::string::StringExecFns;
 
 verus! {
 
@@ -302,10 +303,7 @@ pub fn row_identity<'a>(id: IdentityField<'a>, path: IdentityField<'a>, kind: Id
 pub fn field_changed(
     mode: &str, before: bool, after: bool, equal_values: bool,
 ) -> (changed: bool)
-    ensures changed == (
-        (before || mode@ != "modify-delete-existing"@)
-        && (before != after || (before && after && !equal_values))
-    ),
+    ensures changed == selected_change(mode@,before,after,equal_values),
 {
     if !before { return after && !<&str>::exec_eq(mode, "modify-delete-existing"); }
     !after || !equal_values
@@ -780,6 +778,242 @@ pub fn select_document<K: Ord + Copy>(
     }
 }
 
+/// Return all mapped children in their original order, or the first error.
+/// The callback is the actual recursive traversal invoked by both data commands.
+pub open spec fn processed<T,E,F:Fn(usize)->Result<T,E>>(visit:F, items:Seq<T>, n:int) -> bool {
+    items.len()==n && forall|i:usize| i<n ==> visit.ensures((i,),Ok::<T,E>(#[trigger] items[i as int]))
+}
+
+pub fn children<T,E,F>(length:usize, visit:F) -> (result:Result<Vec<T>,E>)
+    where F:Fn(usize)->Result<T,E>,
+    requires forall|i:usize| i<length ==> visit.requires((i,)),
+    ensures match result {
+        Ok(values) => processed(visit,values@,length as int),
+        Err(error) => exists|i:usize, prefix:Seq<T>| i<length && visit.ensures((i,),Err::<T,E>(error))
+            && #[trigger] processed(visit,prefix,i as int),
+    },
+{
+    let mut accumulated=Vec::new();
+    let mut i=0;
+    while i<length
+        invariant i<=length, forall|j:usize| j<length ==> visit.requires((j,)), processed(visit,accumulated@,i as int),
+        decreases length-i,
+    {
+        let value=match visit(i) {Ok(value)=>value,Err(e)=>{
+            assert(processed(visit,accumulated@,i as int));
+            return Err(e)
+        }};
+        accumulated.push(value);
+        i+=1;
+    }
+    Ok(accumulated)
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+#[cfg_attr(not(verus_keep_ghost),serde(untagged))]
+pub enum ArrayForm<K,T> {
+    Array((&'static str,Vec<T>)),
+    Rows((&'static str,BTreeMap<K,T>)),
+}
+
+/// Row identities come from the same input array. Keep positional results for
+/// ordinary arrays and associate each stable identity with its exact value.
+pub fn array_form<K:Ord,T>(ids:Option<Vec<K>>, values:Vec<T>) -> (out:ArrayForm<K,T>)
+    requires ids matches Some(keys) ==> keys.len()==values.len() && keys@.no_duplicates(),
+        vstd::laws_cmp::obeys_cmp::<K>(),
+    ensures match (ids,out) {
+        (None,ArrayForm::Array((tag,items))) => tag@=="array"@ && items@==values@,
+        (Some(keys),ArrayForm::Rows((tag,map))) =>
+            tag@=="rows"@ && map@.dom()==keys@.to_set()
+            && forall|i:int| 0<=i<keys.len() ==> map@[keys@[i]]==#[trigger] values@[i],
+        _=>false,
+    },
+{
+    let keys=match ids {None=>return ArrayForm::Array(("array",values)),Some(keys)=>keys};
+    let mut map=BTreeMap::new();
+    let count=keys.len();
+    let ghost all_keys=keys@;
+    let ghost all_values=values@;
+    let mut keys=keys.into_iter();
+    let mut values=values.into_iter();
+    let mut i=0;
+    while i<count
+        invariant count==all_keys.len(), i<=all_keys.len(), all_keys.no_duplicates(), all_keys.len()==all_values.len(),
+            keys@==(i as int,all_keys),values@==(i as int,all_values),
+            vstd::laws_cmp::obeys_cmp::<K>(),
+            forall|k:K| #[trigger] map@.contains_key(k) == (exists|j:int| 0<=j<i && #[trigger] all_keys[j]==k),
+            forall|j:int| 0<=j<i ==> map@[all_keys[j]] == #[trigger] all_values[j],
+        decreases all_keys.len()-i,
+    {
+        let key=keys.next().unwrap();
+        let value=values.next().unwrap();
+        map.insert(key,value);
+        assert forall|k:K| #[trigger] map@.contains_key(k)==(exists|j:int| 0<=j<i+1 && #[trigger] all_keys[j]==k) by {
+            if k==all_keys[i as int] {assert(all_keys[i as int]==k);}
+        }
+        i+=1;
+    }
+    assert(map@.dom() =~= all_keys.to_set());
+    ArrayForm::Rows(("rows",map))
+}
+
+/// The first invalid or duplicate row ends this array. Successful identities
+/// line up one-to-one with all input slots.
+pub fn row_keys<E,R,D>(n:usize, render:R, duplicate:D) -> (out:Result<Vec<String>,E>)
+    where R:Fn(usize)->Result<String,E>, D:FnOnce(&String)->E,
+    requires forall|i:usize| i<n ==> render.requires((i,)), forall|s:&String| duplicate.requires((s,)),
+        vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures match out {
+        Ok(keys) => keys@.no_duplicates() && processed(render,keys@,n as int),
+        Err(e) => exists|i:usize, prefix:Seq<String>| i<n && prefix.no_duplicates()
+            && #[trigger] processed(render,prefix,i as int) && (
+                render.ensures((i,),Err::<String,E>(e))
+                || exists|s:String| #[trigger] render.ensures((i,),Ok::<String,E>(s))
+                    && prefix.contains(s) && duplicate.ensures((&s,),e)),
+    },
+{
+    let mut keys:Vec<String>=Vec::new();
+    let mut seen=BTreeSet::new();
+    let mut i=0;
+    while i<n
+        invariant i<=n, processed(render,keys@,i as int), keys@.no_duplicates(), seen@==keys@.to_set(),
+            vstd::laws_cmp::obeys_cmp::<String>(), forall|k:usize| k<n ==> render.requires((k,)),
+            forall|s:&String| duplicate.requires((s,)),
+        decreases n-i,
+    {
+        let key=match render(i) {
+            Ok(key)=>key,
+            Err(e)=>{assert(processed(render,keys@,i as int)); return Err(e)},
+        };
+        if !new_row(&mut seen,key.clone()) {
+            assert(keys@.contains(key));
+            let e=duplicate(&key);
+            assert(processed(render,keys@,i as int));
+            return Err(e);
+        }
+        assert(!keys@.contains(key));
+        let ghost prior=keys@;
+        keys.push(key);
+        assert(keys@.to_set() =~= prior.to_set().insert(key)) by {
+            assert forall|item:String| #[trigger] keys@.to_set().contains(item) == (prior.contains(item)||item==key) by {
+                if keys@.contains(item) {
+                    let j=choose|j:int| 0<=j<keys.len() && keys@[j]==item;
+                    if j<prior.len() {assert(prior[j]==item);}
+                }
+                if prior.contains(item) {
+                    let j=choose|j:int| 0<=j<prior.len() && prior[j]==item;
+                    assert(keys@[j]==item);
+                    assert(keys@.contains(item));
+                }
+                if item==key {assert(keys@[i as int]==item);assert(keys@.contains(item));}
+            }
+        }
+
+        i+=1;
+    }
+    Ok(keys)
+}
+
+pub enum Step<'a> { Leaf, Child(&'a str, usize) }
+
+/// The recursion consumes exactly one token at each descent. A value is
+/// selected at its current physical path only after the full pattern.
+pub fn step(parts:&[String], depth:usize) -> (next:Step<'_>)
+    requires depth <= parts.len(),
+    ensures match next {
+        Step::Leaf => depth == parts.len(),
+        Step::Child(token,child) => depth < parts.len() && token@ == parts@[depth as int]@ && child == depth + 1,
+    },
+{
+    if depth == parts.len() {Step::Leaf} else { Step::Child(parts[depth].as_str(),depth+1) }
+}
+
+pub open spec fn identity_prefix(object:bool) -> Seq<char> {
+    if object {"key:"@} else {"index:"@}
+}
+
+/// A physical array index is used as identity only for an unnamed array.
+pub fn selection_identity(object:bool, component:&str, named:Option<&str>) -> (identity:String)
+    ensures identity@ == if !object && named.is_some() {named.unwrap()@}
+        else {identity_prefix(object) + component@},
+{
+    if !object {
+        if let Some(name)=named {return String::from_str(name);}
+    }
+    let mut out=if object {String::from_str("key:")} else {String::from_str("index:")};
+    out.append(component);out
+}
+
+/// Each projected difference retains the borrowed key and both original
+/// selections so the serializer cannot substitute normalized values or paths.
+pub struct Difference<'a,K,V> { pub key:&'a K, pub before:Option<&'a V>, pub after:Option<&'a V> }
+
+pub open spec fn selected_change(mode:Seq<char>, old:bool, new:bool, same:bool) -> bool {
+    (old || mode != "modify-delete-existing"@) && (old != new || (old && new && !same))
+}
+
+pub fn difference<'a,K,V,F>(key:&'a K, before:Option<&'a V>, after:Option<&'a V>, mode:&str, equal:F)
+    -> (out:Option<Difference<'a,K,V>>)
+    where F:FnOnce(&V,&V)->bool,
+    requires forall|a:&V,b:&V| equal.requires((a,b)),
+    ensures ({
+        let selected = match (before,after) {
+            (Some(a),Some(b)) => exists|same:bool| #[trigger] equal.ensures((a,b),same)
+                && out.is_some()==selected_change(mode@,true,true,same),
+            _ => out.is_some() == selected_change(mode@,before.is_some(),after.is_some(),false),
+        };
+        selected && (out matches Some(d) ==> d.key==key && d.before==before && d.after==after)
+    }),
+{
+    let same=match (before,after) { (Some(a),Some(b))=>equal(a,b), _=>false };
+    if field_changed(mode,before.is_some(),after.is_some(),same) {
+        Some(Difference{key,before,after})
+    } else { None }
+}
+
+/// Include every identity from both selections exactly once. The native BTreeSet
+/// iterator supplies its standard total order to classify-v1 and report-v1.
+pub fn selection_keys<'a,K:Ord,V>(before:&'a BTreeMap<K,V>,after:&'a BTreeMap<K,V>)
+    -> (keys:BTreeSet<&'a K>)
+    requires vstd::laws_cmp::obeys_cmp::<K>(), vstd::laws_cmp::obeys_cmp::<&K>(),
+    ensures forall|key:&K| #[trigger] keys@.contains(key) == (before@.contains_key(*key)||after@.contains_key(*key)),
+{
+    let mut keys=BTreeSet::new();
+    add_keys(&mut keys,before);
+    add_keys(&mut keys,after);
+    keys
+}
+
+fn add_keys<'a,K:Ord,V>(out:&mut BTreeSet<&'a K>,source:&'a BTreeMap<K,V>)
+    requires vstd::laws_cmp::obeys_cmp::<K>(), vstd::laws_cmp::obeys_cmp::<&K>(),
+    ensures forall|key:&K| #[trigger] out@.contains(key)==(old(out)@.contains(key)||source@.contains_key(*key)),
+{
+    let mut iter=source.keys();
+    let ghost declared=iter@.1;
+    loop
+        invariant iter@.1==declared, 0<=iter@.0<=declared.len(), declared.to_set()==source@.dom(),
+            vstd::laws_cmp::obeys_cmp::<&K>(),
+            forall|k:&K| #[trigger] out@.contains(k) == (old(out)@.contains(k) ||
+                    exists|i:int| 0<=i<iter@.0 && #[trigger] declared[i]==*k),
+        ensures forall|k:&K| #[trigger] out@.contains(k) == (old(out)@.contains(k)||source@.contains_key(*k)),
+        decreases declared.len()-iter@.0,
+    {
+        let ghost previous=iter@.0;
+        let key=match iter.next() {Some(k)=>k,None=>{
+            assert forall|k:&K| #[trigger] out@.contains(k) == (old(out)@.contains(k)||source@.contains_key(*k)) by {
+                if source@.contains_key(*k) { assert(declared.contains(*k)); }
+                if exists|i:int| 0<=i<iter@.0 && #[trigger] declared[i]==*k { assert(declared.contains(*k)); }
+            }
+            break;
+        }};
+        out.insert(key);
+        assert forall|k:&K| #[trigger] out@.contains(k) == (old(out)@.contains(k) ||
+                exists|i:int| 0<=i<iter@.0 && #[trigger] declared[i]==*k) by {
+            if k==key { assert(declared[previous]==*k); }
+        }
+    }
+}
+
 pub fn new_row<K: Ord>(seen: &mut BTreeSet<K>, id: K) -> (fresh: bool)
     requires vstd::laws_cmp::obeys_cmp::<K>(),
     ensures fresh == !old(seen)@.contains(id), seen@ == old(seen)@.insert(id),
@@ -896,6 +1130,51 @@ pub fn report_finding<'a, T>(rules: &'a [T], products: &'a [T])
         i += 1;
     }
     ("warn", Some(refs))
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct Finding<'a,T> {
+    pub code:&'a str,
+    pub level:&'static str,
+    pub message:String,
+    pub delta_refs:Vec<&'a T>,
+    pub causes:[&'static str;1],
+}
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct Outputs<'a,R> { pub rule_changes:&'a R }
+
+#[cfg_attr(not(verus_keep_ghost),derive(serde::Serialize))]
+pub struct ReportEnvelope<'a,T,R> {
+    pub status:&'static str,
+    pub findings:Vec<Finding<'a,T>>,
+    pub outputs:Outputs<'a,R>,
+}
+
+/// The only warning is attached to the actual classification with the host's
+/// code. Only a mixed report evaluates the diagnostic formatter.
+pub fn report_envelope<'a,T,R,M>(rules:&'a [T], products:&'a [T], changes:&'a R, code:&'a str, message:M)
+    -> (out:ReportEnvelope<'a,T,R>)
+    where M:FnOnce()->String,
+    requires message.requires(()),
+    ensures out.outputs.rule_changes==changes,
+        if rules.len()==0 || products.len()==0 {out.status@=="pass"@ && out.findings.len()==0}
+        else {
+            let item=out.findings@[0];
+            &&& out.status@=="warn"@ && out.findings.len()==1
+            &&& item.code@==code@ && item.level@=="warning"@ && message.ensures((),item.message)
+            &&& item.causes@[0]@=="/outputs/rule_changes"@
+            &&& item.delta_refs.len()==rules.len()+products.len()
+            &&& forall|i:int| 0<=i<rules.len() ==> *(#[trigger] item.delta_refs[i])==rules@[i]
+            &&& forall|i:int| 0<=i<products.len() ==> *(#[trigger] item.delta_refs[rules.len()+i])==products@[i]
+        },
+{
+    let (status,refs)=report_finding(rules,products);
+    let mut findings=Vec::new();
+    if let Some(delta_refs)=refs {
+        findings.push(Finding {code,level:"warning",message:message(),delta_refs,causes:["/outputs/rule_changes"]});
+    }
+    ReportEnvelope {status,findings,outputs:Outputs {rule_changes:changes}}
 }
 
 pub fn cost_report_shape(schema: Option<&str>, before_object: bool, after_object: bool) -> (valid: bool)
