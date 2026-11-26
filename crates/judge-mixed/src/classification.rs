@@ -1,6 +1,7 @@
 //! Explicit inputs to the classification used by the FILEMAP workflow selector.
 use super::{Documents, classify_endpoints};
 use crate::Delta;
+use crate::verified_classification::{DocumentPaths, Rule, required_paths};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,14 +13,6 @@ pub struct Endpoint {
     pub(super) workflow: String,
     pub(super) surfaces: BTreeMap<String, String>,
     semantic_fields: Vec<Rule>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Rule {
-    path: String,
-    pointers: Vec<String>,
-    on: String,
 }
 
 impl Endpoint {
@@ -80,50 +73,21 @@ struct DocumentSelection {
     delta: Vec<Delta>,
 }
 
-fn required_paths<'a>(
-    base: &'a [Rule],
-    candidate: &'a [Rule],
-    delta: &'a [Delta],
-) -> [BTreeSet<&'a str>; 2] {
-    let mut named = BTreeSet::new();
-    for rule in base.iter().chain(candidate) {
-        crate::verified_classification::register_document(
-            &mut named,
-            rule.path.as_str(),
-            rule.pointers.len(),
-        );
-    }
-    let mut before = BTreeSet::new();
-    let mut after = BTreeSet::new();
-    for change in delta {
-        crate::verified_classification::select_document(
-            &named,
-            &mut before,
-            &mut after,
-            change.path.as_str(),
-            change.old_blob.is_some(),
-            change.new_blob.is_some(),
-        );
-    }
-    [before, after]
-}
-
 pub(super) fn endpoint_paths<'a>(
     a: &'a Endpoint,
     b: &'a Endpoint,
     delta: &'a [Delta],
-) -> [BTreeSet<&'a str>; 2] {
+) -> DocumentPaths<'a> {
     required_paths(&a.semantic_fields, &b.semantic_fields, delta)
 }
 
 pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
     let mut bytes = Vec::new();
-    const LIMIT: u64 = 64 * 1024 * 1024;
     input
-        .take(LIMIT + 1)
+        .take(crate::verified_classification::INPUT_LIMIT as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > LIMIT {
+    if !crate::verified_classification::admits_input(bytes.len()) {
         return Err("E_SEMANTIC_INPUT: input exceeds 64 MiB".into());
     }
     serde_json::from_slice(&bytes).map_err(|e| format!("E_SEMANTIC_INPUT: {e}"))
@@ -131,8 +95,8 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T
 
 pub fn document_paths(input: impl Read) -> Result<Value, String> {
     let request: DocumentSelection = read(input)?;
-    let [base, candidate] = required_paths(&request.base, &request.candidate, &request.delta);
-    Ok(serde_json::json!({"base":base,"candidate":candidate}))
+    let paths = required_paths(&request.base, &request.candidate, &request.delta);
+    serde_json::to_value(paths).map_err(|e| e.to_string())
 }
 
 /// Evaluate caller-provided endpoint data without inspecting the filesystem.

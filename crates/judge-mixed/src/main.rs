@@ -10,20 +10,23 @@ fn main() -> std::process::ExitCode {
     let mut args = arguments.iter();
     let operation = args.next();
     let operation = operation.and_then(|arg| arg.to_str());
-    if let Some(
-        command @ ("classify-v1" | "document-paths-v1" | "plan-classification-v1" | "report-v1"),
-    ) = operation
+    if let Some(selected) =
+        operation.and_then(|name| chrono_judge_mixed::data_command(name, args.len()))
     {
-        if args.next().is_some() {
-            eprintln!("E_USAGE: {command} reads one JSON object from stdin");
-            return 2.into();
-        }
+        use chrono_judge_mixed::DataCommand;
+        let command = match selected {
+            Ok(command) => command,
+            Err(label) => {
+                eprintln!("E_USAGE: {label} reads one JSON object from stdin");
+                return 2.into();
+            }
+        };
         let input = std::io::stdin().lock();
         let result = match command {
-            "document-paths-v1" => chrono_judge_mixed::document_paths(input),
-            "plan-classification-v1" => chrono_judge_mixed::native::plan(input),
-            "report-v1" => chrono_judge_mixed::native::report(input),
-            _ => chrono_judge_mixed::classify_query(input),
+            DataCommand::Documents => chrono_judge_mixed::document_paths(input),
+            DataCommand::Plan => chrono_judge_mixed::native::plan(input),
+            DataCommand::Report => chrono_judge_mixed::native::report(input),
+            DataCommand::Classify => chrono_judge_mixed::classify_query(input),
         }
         .and_then(|value| {
             let mut out = std::io::stdout().lock();

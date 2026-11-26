@@ -2,22 +2,11 @@
 pub mod native;
 mod semantic;
 mod verified_classification;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
-/// Serializable DELTA entries accepted by the versioned classification commands.
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Delta {
-    pub kind: String,
-    pub path: String,
-    pub old_blob: Option<String>,
-    pub new_blob: Option<String>,
-    pub old_mode: Option<String>,
-    pub new_mode: Option<String>,
-}
+pub use verified_classification::{DataCommand, Delta, data_command};
 mod classification;
 pub use classification::Endpoint;
 pub use classification::{document_paths, query as classify_query};

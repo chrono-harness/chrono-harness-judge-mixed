@@ -33,8 +33,10 @@ pub fn plan(input: impl Read) -> Result<Value, String> {
         |i| q.prior_costs[i] == q.prior_costs[0],
         || q.prior_costs[0]["binding"] == q.binding,
     )?;
-    let [base, candidate] = classification::endpoint_paths(&q.base, &q.candidate, &q.delta);
-    Ok(json!({"base":base,"candidate":candidate,"context":{"binding":q.binding,"costs":costs}}))
+    let paths = classification::endpoint_paths(&q.base, &q.candidate, &q.delta);
+    Ok(
+        json!({"base":paths.base,"candidate":paths.candidate,"context":{"binding":q.binding,"costs":costs}}),
+    )
 }
 
 #[derive(Deserialize)]
