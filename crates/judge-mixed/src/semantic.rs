@@ -1,10 +1,10 @@
 //! Stable row identities are separate from physical JSON pointers.
 use crate::verified_classification::{
-    IdentityField, RowIdentity, matches_child, new_row, record_selection, requires_row_identity,
+    IdentityField, RowIdentity, matches_child, record_selection, requires_row_identity,
     retirement_rows, row_identity,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 fn child_pointer(parent: &str, key: &str) -> String {
     crate::verified_classification::child_pointer(parent, key)
         .into_iter()
@@ -34,24 +34,27 @@ fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<Stri
     }) {
         return Ok(None);
     }
-    let mut seen = BTreeSet::new();
-    let mut ids = vec![];
-    for row in rows {
-        let id = match row_identity(
-            field(row, "id"),
-            field(row, "path"),
-            field(row, "kind"),
-            workflow_retirements,
-        )? {
-            RowIdentity::Id(value) => format!("id:{value}"),
-            RowIdentity::Path(value) => format!("path:{value}"),
-            RowIdentity::Retirement(kind, value) => format!("retirement:{}", json!([kind, value])),
-        };
-        if !new_row(&mut seen, id.clone()) {
-            return Err(format!("E_SEMANTIC_IDENTITY: duplicate {id}"));
-        }
-        ids.push(id);
-    }
+    let ids = crate::verified_classification::row_keys(
+        rows.len(),
+        |i| {
+            let row = &rows[i];
+            Ok(
+                match row_identity(
+                    field(row, "id"),
+                    field(row, "path"),
+                    field(row, "kind"),
+                    workflow_retirements,
+                )? {
+                    RowIdentity::Id(value) => format!("id:{value}"),
+                    RowIdentity::Path(value) => format!("path:{value}"),
+                    RowIdentity::Retirement(kind, value) => {
+                        format!("retirement:{}", json!([kind, value]))
+                    }
+                },
+            )
+        },
+        |key| format!("E_SEMANTIC_IDENTITY: duplicate {key}"),
+    )?;
     Ok(Some(ids))
 }
 // Kind tags keep user objects distinct from the internal row-map representation.
@@ -67,21 +70,12 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
                 .collect::<Result<BTreeMap<_, _>, String>>()?
         ])),
         Value::Array(rows) => {
-            let values = rows
-                .iter()
-                .enumerate()
-                .map(|(i, v)| normalized(v, &child_pointer(pointer, &i.to_string()), workflow))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(
-                if let Some(ids) = row_ids(rows, retirement_rows(workflow, pointer))? {
-                    json!([
-                        "rows",
-                        ids.into_iter().zip(values).collect::<BTreeMap<_, _>>()
-                    ])
-                } else {
-                    json!(["array", values])
-                },
-            )
+            let values = crate::verified_classification::children(rows.len(), |i| {
+                normalized(&rows[i], &child_pointer(pointer, &i.to_string()), workflow)
+            })?;
+            let ids = row_ids(rows, retirement_rows(workflow, pointer))?;
+            serde_json::to_value(crate::verified_classification::array_form(ids, values))
+                .map_err(|e| e.to_string())
         }
         _ => Ok(json!(["scalar", value])),
     }
@@ -94,30 +88,35 @@ struct Selection {
 type Selections = BTreeMap<Vec<String>, Selection>;
 fn select(
     value: &Value,
-    rest: &[String],
+    parts: &[String],
+    depth: usize,
     pointer: String,
     identity: Vec<String>,
     out: &mut Selections,
     workflow: bool,
 ) -> Result<(), String> {
-    if rest.is_empty() {
+    let crate::verified_classification::Step::Child(token, next_depth) =
+        crate::verified_classification::step(parts, depth)
+    else {
         let entry = Selection {
             normalized: normalized(value, &pointer, workflow)?,
             pointer,
             value: value.clone(),
         };
         return record_selection(out, identity, entry).map_err(String::from);
-    }
-    let token = &rest[0];
+    };
     match value {
         Value::Object(map) => {
             for (key, child) in map {
                 if matches_child(token, key) {
                     let mut next = identity.clone();
-                    next.push(format!("key:{key}"));
+                    next.push(crate::verified_classification::selection_identity(
+                        true, key, None,
+                    ));
                     select(
                         child,
-                        &rest[1..],
+                        parts,
+                        next_depth,
                         child_pointer(&pointer, key),
                         next,
                         out,
@@ -132,14 +131,15 @@ fn select(
                 let index = i.to_string();
                 if matches_child(token, &index) {
                     let mut next = identity.clone();
-                    next.push(
-                        ids.as_ref()
-                            .map(|ids| ids[i].clone())
-                            .unwrap_or_else(|| format!("index:{index}")),
-                    );
+                    next.push(crate::verified_classification::selection_identity(
+                        false,
+                        &index,
+                        ids.as_ref().map(|ids| ids[i].as_str()),
+                    ));
                     select(
                         child,
-                        &rest[1..],
+                        parts,
+                        next_depth,
                         child_pointer(&pointer, &index),
                         next,
                         out,
@@ -164,28 +164,42 @@ pub fn changes(
     let mut old = Selections::new();
     let mut new = Selections::new();
     if let Some(v) = before {
-        select(v, &parts, String::new(), vec![], &mut old, before_workflow)?;
+        select(
+            v,
+            &parts,
+            0,
+            String::new(),
+            vec![],
+            &mut old,
+            before_workflow,
+        )?;
     }
     if let Some(v) = after {
-        select(v, &parts, String::new(), vec![], &mut new, after_workflow)?;
+        select(
+            v,
+            &parts,
+            0,
+            String::new(),
+            vec![],
+            &mut new,
+            after_workflow,
+        )?;
     }
-    let keys: BTreeSet<_> = old.keys().chain(new.keys()).collect();
+    let keys = crate::verified_classification::selection_keys(&old, &new);
     let mut changes = vec![];
     for key in keys {
-        let a = old.get(key);
-        let b = new.get(key);
-        let equal_values =
-            matches!((a, b), (Some(old), Some(new)) if old.normalized == new.normalized);
-        if !crate::verified_classification::field_changed(
+        let Some(difference) = crate::verified_classification::difference(
+            key,
+            old.get(key),
+            new.get(key),
             on,
-            a.is_some(),
-            b.is_some(),
-            equal_values,
-        ) {
+            |before, after| before.normalized == after.normalized,
+        ) else {
             continue;
-        }
+        };
         let encode = |s: &Selection| json!({"pointer":s.pointer,"value":s.value});
-        changes.push(json!({"pattern":pattern,"on":on,"identity":key,"before":a.map(encode),"after":b.map(encode)}));
+        changes.push(json!({"pattern":pattern,"on":on,"identity":difference.key,
+            "before":difference.before.map(encode),"after":difference.after.map(encode)}));
     }
     Ok(changes)
 }

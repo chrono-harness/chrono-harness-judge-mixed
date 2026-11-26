@@ -1,7 +1,7 @@
 //! Native judge data operations. The runner admits the sealed request and registration owns the Git reader.
 use crate::{Delta, Documents, Endpoint, classification, produce};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::io::Read;
 
 #[derive(Deserialize)]
@@ -72,15 +72,19 @@ pub fn report(input: impl Read) -> Result<Value, String> {
         &q.context.costs,
     )?;
     output["binding"] = q.context.binding;
-    let mut findings = vec![];
     let rules = output["rule_paths"].as_array().unwrap();
     let products = output["product_paths"].as_array().unwrap();
-    let (status, references) = crate::verified_classification::report_finding(rules, products);
-    if let Some(references) = references {
-        findings.push(json!({"code":q.warning_code,"level":"warning","message":format!(
-            "Rule and product changes share this DELTA. Rules: {}; products: {}. Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown.",
-            output["rule_paths"], output["product_paths"]
-        ),"delta_refs":references,"causes":["/outputs/rule_changes"]}));
-    }
-    Ok(json!({"status":status,"findings":findings,"outputs":{"rule_changes":output}}))
+    let report = crate::verified_classification::report_envelope(
+        rules,
+        products,
+        &output,
+        &q.warning_code,
+        || {
+            format!(
+                "Rule and product changes share this DELTA. Rules: {}; products: {}. Before/after costs: predecessor outputs.costs (full report: /costs; provenance: /sources/~1costs); unknown coordinates remain unknown.",
+                output["rule_paths"], output["product_paths"]
+            )
+        },
+    );
+    serde_json::to_value(report).map_err(|e| e.to_string())
 }
