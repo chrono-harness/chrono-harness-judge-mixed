@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 pub const MIXED_SCHEMA: &str = "chrono-rule-changes/v2";
 pub type Documents = BTreeMap<String, Value>;
-pub use verified_classification::{DataCommand, Delta, data_command};
+pub use verified_classification::{DataCommand, Delta, data_command, data_exit, on_success};
 mod classification;
 pub use classification::Endpoint;
 pub use classification::{document_paths, query as classify_query};

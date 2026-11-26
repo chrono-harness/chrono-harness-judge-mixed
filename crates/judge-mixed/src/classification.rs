@@ -82,15 +82,18 @@ pub(super) fn endpoint_paths<'a>(
 }
 
 pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
-    let mut bytes = Vec::new();
-    input
-        .take(crate::verified_classification::INPUT_LIMIT as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if !crate::verified_classification::admits_input(bytes.len()) {
-        return Err("E_SEMANTIC_INPUT: input exceeds 64 MiB".into());
-    }
-    serde_json::from_slice(&bytes).map_err(|e| format!("E_SEMANTIC_INPUT: {e}"))
+    crate::verified_classification::decode_input(
+        || {
+            let mut bytes = Vec::new();
+            input
+                .take(crate::verified_classification::INPUT_LIMIT as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            Ok(bytes)
+        },
+        |bytes| serde_json::from_slice(&bytes).map_err(|e| format!("E_SEMANTIC_INPUT: {e}")),
+        || "E_SEMANTIC_INPUT: input exceeds 64 MiB".to_owned(),
+    )
 }
 
 pub fn document_paths(input: impl Read) -> Result<Value, String> {

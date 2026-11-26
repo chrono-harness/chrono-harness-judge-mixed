@@ -439,6 +439,41 @@ pub fn admits_input(bytes: usize) -> (allowed: bool)
     ensures allowed == (bytes <= 67_108_864),
 { bytes <= INPUT_LIMIT }
 
+/// A bounded read returns its own error first. Decode receives exactly the
+/// bytes observed by the reader and can run only for an admitted length.
+pub fn decode_input<T,E,R,D,L>(read: R, decode: D, too_large: L) -> (out: Result<T,E>)
+    where R: FnOnce() -> Result<Vec<u8>,E>, D: FnOnce(Vec<u8>) -> Result<T,E>, L: FnOnce() -> E,
+    requires read.requires(()), too_large.requires(()),
+        forall|bytes: Vec<u8>| bytes.len() <= INPUT_LIMIT ==> decode.requires((bytes,)),
+    ensures
+        (exists|error:E| #[trigger] read.ensures((), Err(error)) && out == Err::<T,E>(error))
+        || (exists|bytes:Vec<u8>| #[trigger] read.ensures((),Ok(bytes))
+            && if bytes.len() <= INPUT_LIMIT { decode.ensures((bytes,),out) }
+                else { exists|e:E| #[trigger] too_large.ensures((),e) && out == Err::<T,E>(e) }),
+{
+    let bytes = match read() { Ok(bytes) => bytes, Err(e) => return Err(e) };
+    if !admits_input(bytes.len()) { return Err(too_large()); }
+    decode(bytes)
+}
+
+/// Pass the original error through, or give the next stage the exact value.
+pub fn on_success<T,U,E,F>(result: Result<T,E>, next: F) -> (out: Result<U,E>)
+    where F: FnOnce(T) -> Result<U,E>,
+    requires forall|v:T| next.requires((v,)),
+    ensures match result {
+        Err(e) => out == Err::<U,E>(e),
+        Ok(v) => next.ensures((v,),out),
+    },
+{
+    match result { Err(e) => Err(e), Ok(v) => next(v) }
+}
+
+pub fn data_exit<E>(result: Result<(),E>) -> (out: (u8,Option<E>))
+    ensures match result { Ok(()) => out == (0u8,None::<E>), Err(e) => out == (2u8,Some(e)) },
+{
+    match result { Ok(()) => (0,None), Err(e) => (2,Some(e)) }
+}
+
 /// A rule on either endpoint names a document only when it selects a field.
 pub fn register_document<K: Ord>(named: &mut BTreeSet<K>, path: K, pointers: usize)
     requires vstd::laws_cmp::obeys_cmp::<K>(),

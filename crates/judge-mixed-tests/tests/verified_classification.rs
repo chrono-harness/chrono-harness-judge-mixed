@@ -13,6 +13,31 @@ use vstd::vpanic as panic;
 verus! {
 
 #[cfg_attr(not(verus_keep_ghost), test)]
+fn document_io_returns_the_first_diagnostic_and_requires_a_successful_flush() {
+    let failed_read = || -> (r: Result<Vec<u8>,u8>) ensures r == Err::<Vec<u8>,u8>(4), { Err(4) };
+    let empty = || -> (r: Result<Vec<u8>,u8>) ensures r matches Ok(v) && v.len() == 0, { Ok(Vec::new()) };
+    let decode_error = |_bytes: Vec<u8>| -> (r: Result<u8,u8>) ensures r == Err::<u8,u8>(5), { Err(5) };
+    let too_large = || -> (e: u8) ensures e == 6, { 6 };
+    expect(matches!(policy::decode_input(failed_read,decode_error,too_large), Err(4)));
+    expect(matches!(policy::decode_input(empty,decode_error,too_large), Err(5)));
+
+    let write = |v:u8| -> (r:Result<u8,u8>) ensures r == (if v == 1 { Ok::<u8,u8>(9) } else { Err::<u8,u8>(7) }), {
+        if v == 1 { Ok(9) } else { Err(7) }
+    };
+    let flush = |writer:u8| -> (r:Result<(),u8>) ensures r == (if writer == 9 { Err::<(),u8>(8) } else { Ok::<(),u8>(()) }), {
+        if writer == 9 { Err(8) } else { Ok(()) }
+    };
+    let (status, error) = policy::data_exit(policy::on_success(policy::on_success(Err(4),write),flush));
+    expect(status == 2 && matches!(error,Some(4)));
+    let (status, error) = policy::data_exit(policy::on_success(policy::on_success(Ok(0),write),flush));
+    expect(status == 2 && matches!(error,Some(7)));
+    let (status, error) = policy::data_exit(policy::on_success(policy::on_success(Ok(1),write),flush));
+    expect(status == 2 && matches!(error,Some(8)));
+    let (status, error) = policy::data_exit(policy::on_success(Ok(0),flush));
+    expect(status == 0 && error.is_none());
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
 fn document_command_is_selected_only_without_extra_arguments() {
     proof {
         reveal_strlit("document-paths-v1"); reveal_strlit("classify-v1");
