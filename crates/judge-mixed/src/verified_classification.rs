@@ -1,5 +1,22 @@
 //! Classification of one changed path from its two registered endpoint surfaces.
 #![allow(unexpected_cfgs)]
+#[cfg(verus_keep_ghost)]
+#[path = "classification.rs"]
+pub mod classification;
+#[cfg(verus_keep_ghost)]
+#[path = "native.rs"]
+pub mod native;
+#[cfg(verus_keep_ghost)]
+pub use native::{PlanFailure, plan_delta};
+#[cfg(verus_keep_ghost)]
+#[path = "main.rs"]
+pub mod cli;
+#[cfg(verus_keep_ghost)]
+#[path = "lib.rs"]
+pub mod cost_input;
+#[cfg(verus_keep_ghost)]
+#[path = "semantic.rs"]
+pub mod semantic;
 use std::collections::{BTreeMap, BTreeSet};
 use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
@@ -693,43 +710,6 @@ pub fn same_delta(a: &[Delta], b: &[Delta]) -> (same:bool)
         i+=1;
     }
     true
-}
-
-pub enum PlanFailure<E> { Contract(&'static str), Decode(E) }
-
-/// Validate each entire endpoint, then the schema, before invoking the JSON
-/// adapter. A successful value is the adapter's exact decoded DELTA.
-pub fn plan_delta<E,D>(
-    base_surface:&BTreeMap<String,String>, base_rules:&[Rule],
-    candidate_surface:&BTreeMap<String,String>, candidate_rules:&[Rule],
-    schema:Option<&str>, decode:D,
-) -> (out:Result<Vec<Delta>,PlanFailure<E>>)
-    where D:FnOnce()->Result<Vec<Delta>,E>,
-    requires vstd::laws_cmp::obeys_cmp::<String>(), decode.requires(()),
-    ensures ({
-        let bs=valid_surfaces(base_surface@); let bm=valid_modes(base_rules@);
-        let cs=valid_surfaces(candidate_surface@); let cm=valid_modes(candidate_rules@);
-        let good_schema=match schema { Some(s)=>s@=="chrono-filemap-impact/v6"@, None=>false };
-        if !(bs && bm && cs && cm && good_schema) {
-            out matches Err(PlanFailure::Contract(e)) && (
-                if !bs { e@=="E_SURFACE_REFERENCE: unknown surface"@ }
-                else if !bm { e@=="E_SEMANTIC_INPUT: unknown semantic change mode"@ }
-                else if !cs { e@=="E_SURFACE_REFERENCE: unknown surface"@ }
-                else if !cm { e@=="E_SEMANTIC_INPUT: unknown semantic change mode"@ }
-                else { e@=="E_IMPACT: unsupported schema"@ })
-        } else {
-            match out {
-                Ok(delta)=>decode.ensures((),Ok::<Vec<Delta>,E>(delta)),
-                Err(PlanFailure::Decode(error))=>decode.ensures((),Err::<Vec<Delta>,E>(error)),
-                _=>false,
-            }
-        }
-    }),
-{
-    if let Err(e)=validate_endpoint(base_surface,base_rules) {return Err(PlanFailure::Contract(e));}
-    if let Err(e)=validate_endpoint(candidate_surface,candidate_rules) {return Err(PlanFailure::Contract(e));}
-    if !impact_schema(schema) {return Err(PlanFailure::Contract("E_IMPACT: unsupported schema"));}
-    match decode() { Ok(delta)=>Ok(delta), Err(e)=>Err(PlanFailure::Decode(e)) }
 }
 
 #[cfg_attr(not(verus_keep_ghost), derive(serde::Serialize))]

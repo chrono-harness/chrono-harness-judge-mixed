@@ -1,12 +1,50 @@
 //! Explicit inputs to the classification used by the FILEMAP workflow selector.
+#![allow(unexpected_cfgs)]
+#[cfg(verus_keep_ghost)]
+use super::{Rule, valid_modes, valid_surfaces, validate_endpoint};
+#[cfg(not(verus_keep_ghost))]
+use crate::verified_classification::{Rule, validate_endpoint};
+use std::collections::BTreeMap;
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// Both consumers report the first invalid endpoint in baseline, candidate order.
+pub fn validate_endpoints(base: &BTreeMap<String, String>, base_rules: &[Rule],
+    candidate: &BTreeMap<String, String>, candidate_rules: &[Rule]) -> (out: Result<(), &'static str>)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures
+        out.is_ok() == (valid_surfaces(base@) && valid_modes(base_rules@)
+            && valid_surfaces(candidate@) && valid_modes(candidate_rules@)),
+        out matches Err(e) ==> e@ == (
+            if !valid_surfaces(base@) { "E_SURFACE_REFERENCE: unknown surface"@ }
+            else if !valid_modes(base_rules@) { "E_SEMANTIC_INPUT: unknown semantic change mode"@ }
+            else if !valid_surfaces(candidate@) { "E_SURFACE_REFERENCE: unknown surface"@ }
+            else { "E_SEMANTIC_INPUT: unknown semantic change mode"@ }),
+{
+    validate_endpoint(base, base_rules)?;
+    validate_endpoint(candidate, candidate_rules)
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 use super::{Documents, classify_endpoints};
+#[cfg(not(verus_keep_ghost))]
 use crate::Delta;
-use crate::verified_classification::{DocumentPaths, Rule, required_paths};
+#[cfg(not(verus_keep_ghost))]
+use crate::verified_classification::{DocumentPaths, required_paths};
+#[cfg(not(verus_keep_ghost))]
 use serde::Deserialize;
+#[cfg(not(verus_keep_ghost))]
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(verus_keep_ghost))]
+use std::collections::BTreeSet;
+#[cfg(not(verus_keep_ghost))]
 use std::io::Read;
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Endpoint {
@@ -15,17 +53,14 @@ pub struct Endpoint {
     pub(super) semantic_fields: Vec<Rule>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 impl Endpoint {
     pub(super) fn patterns(&self, other: &Self) -> BTreeSet<(String, String, String)> {
         crate::verified_classification::patterns(&self.semantic_fields, &other.semantic_fields)
     }
-
-    pub(super) fn validate(&self) -> Result<(), String> {
-        crate::verified_classification::validate_endpoint(&self.surfaces, &self.semantic_fields)
-            .map_err(String::from)
-    }
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Query {
@@ -36,6 +71,7 @@ struct Query {
     after: Documents,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DocumentSelection {
@@ -44,6 +80,7 @@ struct DocumentSelection {
     delta: Vec<Delta>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(super) fn endpoint_paths<'a>(
     a: &'a Endpoint,
     b: &'a Endpoint,
@@ -52,6 +89,7 @@ pub(super) fn endpoint_paths<'a>(
     required_paths(&a.semantic_fields, &b.semantic_fields, delta)
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T, String> {
     crate::verified_classification::decode_input(
         || {
@@ -67,6 +105,7 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(input: impl Read) -> Result<T
     )
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub fn document_paths(input: impl Read) -> Result<Value, String> {
     let request: DocumentSelection = read(input)?;
     let paths = required_paths(&request.base, &request.candidate, &request.delta);
@@ -74,10 +113,15 @@ pub fn document_paths(input: impl Read) -> Result<Value, String> {
 }
 
 /// Evaluate caller-provided endpoint data without inspecting the filesystem.
+#[cfg(not(verus_keep_ghost))]
 pub fn query(input: impl Read) -> Result<Value, String> {
     let q: Query = read(input)?;
-    q.base.validate()?;
-    q.candidate.validate()?;
+    validate_endpoints(
+        &q.base.surfaces,
+        &q.base.semantic_fields,
+        &q.candidate.surfaces,
+        &q.candidate.semantic_fields,
+    )?;
     serde_json::to_value(classify_endpoints(
         &q.base,
         &q.candidate,
