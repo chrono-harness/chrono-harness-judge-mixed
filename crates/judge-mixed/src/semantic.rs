@@ -1,24 +1,58 @@
 //! Stable row identities are separate from physical JSON pointers.
+#![allow(unexpected_cfgs)]
+#[cfg(verus_keep_ghost)]
+use super::IdentityField;
+#[cfg(not(verus_keep_ghost))]
+use crate::verified_classification::IdentityField;
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// Keep missing, present non-string, and actual text distinct at the JSON row boundary.
+pub fn identity_field(value: Option<Option<&str>>) -> (out: IdentityField)
+    ensures match value {
+        None => out is Missing,
+        Some(None) => out is Invalid,
+        Some(Some(text)) => out matches IdentityField::Text(actual) && actual == text,
+    },
+{
+    match value {
+        None => IdentityField::Missing,
+        Some(None) => IdentityField::Invalid,
+        Some(Some(text)) => IdentityField::Text(text),
+    }
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 use crate::verified_classification::{
-    IdentityField, RowIdentity, matches_child, record_selection, requires_row_identity,
-    retirement_rows, row_identity,
+    RowIdentity, matches_child, record_selection, requires_row_identity, retirement_rows,
+    row_identity,
 };
+#[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
+#[cfg(not(verus_keep_ghost))]
 use std::collections::BTreeMap;
 
+#[cfg(not(verus_keep_ghost))]
 struct Members<'a>(serde_json::map::Iter<'a>);
 
+#[cfg(not(verus_keep_ghost))]
 impl<'a> crate::verified_classification::ObjectCursor<'a, Value> for Members<'a> {
     fn next_pair(&mut self) -> Option<(&'a String, &'a Value)> {
         self.0.next()
     }
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn child_pointer(parent: &str, key: &str) -> String {
     crate::verified_classification::child_pointer(parent, key)
         .into_iter()
         .collect()
 }
+#[cfg(not(verus_keep_ghost))]
 fn tokens(pointer: &str) -> Result<Vec<String>, String> {
     use crate::verified_classification::{PointerError, decode_pointer};
     match decode_pointer(pointer) {
@@ -29,14 +63,12 @@ fn tokens(pointer: &str) -> Result<Vec<String>, String> {
         }
     }
 }
+#[cfg(not(verus_keep_ghost))]
 fn field<'a>(row: &'a Value, name: &str) -> IdentityField<'a> {
-    match row.get(name) {
-        None => IdentityField::Missing,
-        Some(Value::String(s)) => IdentityField::Text(s),
-        Some(_) => IdentityField::Invalid,
-    }
+    identity_field(row.get(name).map(Value::as_str))
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<String>>, String> {
     if !requires_row_identity(rows.len(), |i| {
         rows[i].get("id").is_some() || rows[i].get("path").is_some()
@@ -67,6 +99,7 @@ fn row_ids(rows: &[Value], workflow_retirements: bool) -> Result<Option<Vec<Stri
     Ok(Some(ids))
 }
 // Kind tags keep user objects distinct from the internal row-map representation.
+#[cfg(not(verus_keep_ghost))]
 fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, String> {
     match value {
         Value::Object(map) => {
@@ -93,8 +126,11 @@ fn normalized(value: &Value, pointer: &str, workflow: bool) -> Result<Value, Str
         _ => Ok(json!(["scalar", value])),
     }
 }
+#[cfg(not(verus_keep_ghost))]
 use crate::verified_classification::Selection;
+#[cfg(not(verus_keep_ghost))]
 type Selections = BTreeMap<Vec<String>, Selection<Value>>;
+#[cfg(not(verus_keep_ghost))]
 fn select(
     value: &Value,
     parts: &[String],
@@ -170,6 +206,7 @@ fn select(
     }
     Ok(())
 }
+#[cfg(not(verus_keep_ghost))]
 pub fn changes(
     before: Option<&Value>,
     after: Option<&Value>,

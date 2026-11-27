@@ -15,6 +15,58 @@ use vstd::vpanic as panic;
 mod release_observation;
 
 verus! {
+#[cfg(verus_keep_ghost)]
+fn chosen_handler_keeps_its_input_and_row_identity_keeps_its_type(command:policy::DataCommand, input:u8, text:&str) {
+    let docs=|i:u8| -> (r:(u8,u8)) ensures r==(1u8,i) { (1u8,i) };
+    let plan=|i:u8| -> (r:(u8,u8)) ensures r==(2u8,i) { (2u8,i) };
+    let report=|i:u8| -> (r:(u8,u8)) ensures r==(3u8,i) { (3u8,i) };
+    let classify=|i:u8| -> (r:(u8,u8)) ensures r==(4u8,i) { (4u8,i) };
+    let ghost selected = command;
+    let result=policy::cli::run_data(command,input,docs,plan,report,classify);
+    assert(result.1==input);
+    proof { match selected {
+        policy::DataCommand::Documents=>assert(result.0==1), policy::DataCommand::Plan=>assert(result.0==2),
+        policy::DataCommand::Report=>assert(result.0==3), policy::DataCommand::Classify=>assert(result.0==4),
+    }}
+    let absent=policy::semantic::identity_field(None);
+    let invalid=policy::semantic::identity_field(Some(None));
+    let present=policy::semantic::identity_field(Some(Some(text)));
+    assert(absent is Missing && invalid is Invalid);
+    assert(present matches policy::IdentityField::Text(actual) && actual==text);
+}
+
+#[cfg(verus_keep_ghost)]
+fn competing_errors_keep_their_owner(valid:bool, classification:Result<u8,u8>, coverage:Result<(),u8>) {
+    let result=policy::cost_input::checked_costs(valid,
+        || -> (x:u8) ensures x == 17 {17},
+        || -> (x:Result<u8,u8>) ensures x == classification {classification},
+        || -> (x:Result<(),u8>) ensures x == coverage {coverage});
+    if !valid { assert(result matches Err(x) && x == 17); }
+    else {
+        match classification {
+            Err(first) => { assert(result matches Err(x) && x == first); },
+            Ok(value) => match coverage {
+                Err(last) => { assert(result matches Err(x) && x == last); },
+                Ok(()) => { assert(result matches Ok(row) && row.classification == value && row.schema@ == "chrono-rule-changes/v2"@); },
+            },
+        }
+    }
+}
+
+#[cfg(verus_keep_ghost)]
+fn classification_error_follows_endpoint_order(
+    a:&std::collections::BTreeMap<String,String>, ar:&[policy::Rule],
+    b:&std::collections::BTreeMap<String,String>, br:&[policy::Rule],
+)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    let result=policy::classification::validate_endpoints(a,ar,b,br);
+    assert(if !policy::valid_surfaces(a@) { result matches Err(e) && e@ == "E_SURFACE_REFERENCE: unknown surface"@ }
+        else if !policy::valid_modes(ar@) { result matches Err(e) && e@ == "E_SEMANTIC_INPUT: unknown semantic change mode"@ }
+        else if !policy::valid_surfaces(b@) { result matches Err(e) && e@ == "E_SURFACE_REFERENCE: unknown surface"@ }
+        else if !policy::valid_modes(br@) { result matches Err(e) && e@ == "E_SEMANTIC_INPUT: unknown semantic change mode"@ }
+        else { result.is_ok() });
+}
 #[cfg_attr(not(verus_keep_ghost),test)]
 fn release_requires_every_reported_observation() {
     expect(release_observation::accepts(true,Some(false),true,true,2,true,true));

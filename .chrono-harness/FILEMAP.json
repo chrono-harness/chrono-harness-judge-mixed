@@ -646,7 +646,20 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed/src/verified_classification.rs",
+            "operation": "verify.mixed-classification"
+          },
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed/src/lib.rs",
@@ -658,7 +671,20 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed/src/verified_classification.rs",
+            "operation": "verify.mixed-classification"
+          },
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed/src/main.rs",
@@ -670,7 +696,20 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed/src/verified_classification.rs",
+            "operation": "verify.mixed-classification"
+          },
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed/src/native.rs",
@@ -682,7 +721,20 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed/src/verified_classification.rs",
+            "operation": "verify.mixed-classification"
+          },
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed/src/semantic.rs",
@@ -694,7 +746,20 @@
           "kind": "test-execution",
           "to": "test:judge-mixed-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-mixed/src/verified_classification.rs",
+            "operation": "verify.mixed-classification"
+          },
+          {
+            "path": "crates/judge-mixed-tests/tests/verified_classification.rs",
+            "operation": "verify.mixed-classification-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-mixed/src/verified_classification.rs",

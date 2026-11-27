@@ -1,3 +1,36 @@
+#![allow(unexpected_cfgs)]
+#[cfg(verus_keep_ghost)]
+use super::DataCommand;
+#[cfg(not(verus_keep_ghost))]
+use chrono_judge_mixed::DataCommand;
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// Give the selected data command the original input and return its exact result.
+pub fn run_data<I,T,D,P,R,C>(command: DataCommand, input:I, documents:D, plan:P, report:R, classify:C) -> (out:T)
+    where D:FnOnce(I)->T, P:FnOnce(I)->T, R:FnOnce(I)->T, C:FnOnce(I)->T,
+    requires match command {
+        DataCommand::Documents=>documents.requires((input,)), DataCommand::Plan=>plan.requires((input,)),
+        DataCommand::Report=>report.requires((input,)), DataCommand::Classify=>classify.requires((input,)),
+    },
+    ensures match command {
+        DataCommand::Documents=>documents.ensures((input,),out), DataCommand::Plan=>plan.ensures((input,),out),
+        DataCommand::Report=>report.ensures((input,),out), DataCommand::Classify=>classify.ensures((input,),out),
+    },
+{
+    match command {
+        DataCommand::Documents => documents(input),
+        DataCommand::Plan => plan(input),
+        DataCommand::Report => report(input),
+        DataCommand::Classify => classify(input),
+    }
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 fn main() -> std::process::ExitCode {
     use std::io::Write;
     use std::os::unix::process::CommandExt;
@@ -14,7 +47,6 @@ fn main() -> std::process::ExitCode {
         chrono_judge_mixed::Route::Prepare => true,
         chrono_judge_mixed::Route::Pipeline => false,
         chrono_judge_mixed::Route::Data(selected) => {
-            use chrono_judge_mixed::DataCommand;
             let command = match selected {
                 Ok(command) => command,
                 Err(label) => {
@@ -23,12 +55,14 @@ fn main() -> std::process::ExitCode {
                 }
             };
             let input = std::io::stdin().lock();
-            let result = match command {
-                DataCommand::Documents => chrono_judge_mixed::document_paths(input),
-                DataCommand::Plan => chrono_judge_mixed::native::plan(input),
-                DataCommand::Report => chrono_judge_mixed::native::report(input),
-                DataCommand::Classify => chrono_judge_mixed::classify_query(input),
-            };
+            let result = run_data(
+                command,
+                input,
+                chrono_judge_mixed::document_paths,
+                chrono_judge_mixed::native::plan,
+                chrono_judge_mixed::native::report,
+                chrono_judge_mixed::classify_query,
+            );
             let written = chrono_judge_mixed::on_success(result, |value| {
                 let mut out = std::io::stdout().lock();
                 serde_json::to_writer(&mut out, &value).map_err(|e| e.to_string())?;
