@@ -2,6 +2,13 @@
 #![allow(unexpected_cfgs)]
 #[path = "../../judge-mixed/src/verified_classification.rs"]
 mod policy;
+#[cfg(not(verus_keep_ghost))]
+use policy as verified_classification;
+#[cfg(verus_keep_ghost)]
+use policy::semantic;
+#[cfg(not(verus_keep_ghost))]
+#[path = "../../judge-mixed/src/semantic.rs"]
+mod semantic;
 use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
@@ -206,6 +213,113 @@ impl<'a> policy::ObjectCursor<'a,u8> for PairCursor<'a> {
         assert(self.items@.skip(self.at as int) =~= old(self).items@.skip(old(self).at as int).drop_first());
         Some(item)
     }
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn whole_array_normalization_keeps_the_nested_first_error()
+    requires vstd::laws_cmp::obeys_cmp::<String>(), vstd::laws_cmp::obeys_cmp::<&String>(),
+{
+    use semantic::{Node, normalize_node, select_node};
+    let rows: &[u8] = &[1u8];
+    let node: Node<PairCursor<'_>, u8> = Node::Array(rows);
+    let nested = |_i: usize, _row: &u8| -> (r: Result<u8, u8>)
+        ensures r == Err::<u8, u8>(7)
+    { Err(7) };
+    let object = |_key: &String, _row: &u8| -> Result<u8, u8> { Ok(0) };
+    let duplicate = |_rows: &[u8]| -> (r: Result<Option<Vec<String>>, u8>)
+        ensures r == Err::<Option<Vec<String>>, u8>(9)
+    { Err(9) };
+    let selected = normalize_node(node, object, nested, duplicate);
+    proof {
+        if let Err(e) = selected {
+            if e != 7 {
+                assert(duplicate.ensures((rows,), Err::<Option<Vec<String>>,u8>(e)));
+                let all = choose|values: Seq<u8>| #[trigger]
+                    semantic::normalized_children(rows, nested, values, 1);
+                assert(nested.ensures((0usize, &rows@[0]), Ok::<u8, u8>(all[0])));
+            }
+        } else if let Ok(semantic::Normalized::Array(policy::ArrayForm::Array((_, _)))) = &selected {
+            assert(duplicate.ensures((rows,), Ok::<Option<Vec<String>>,u8>(None)));
+        } else {
+            let (keys, values) = choose|keys: Vec<String>, values: Seq<u8>|
+                #![trigger duplicate.ensures((rows,), Ok(Some(keys))), semantic::normalized_children(rows, nested, values, 1)]
+                duplicate.ensures((rows,), Ok(Some(keys)))
+                && semantic::normalized_children(rows, nested, values, 1);
+            assert(duplicate.ensures((rows,), Ok::<Option<Vec<String>>,u8>(Some(keys))));
+        }
+    }
+    expect(matches!(selected, Err(7)));
+
+    let node: Node<PairCursor<'_>, u8> = Node::Array(rows);
+    let parts = [String::from_str("*")];
+    let leaf = |s: u8| -> Result<u8, u8> { Ok(s) };
+    let child = |_row: &u8, _depth: usize, _part: &str, _id: String, _s: u8|
+        -> Result<u8, u8> { Err(7) };
+    let index = |_i: usize| -> String { String::from_str("0") };
+    let selected = select_node(node, &parts, 0, 0, leaf, duplicate, index, child);
+    expect(matches!(selected, Err(9)));
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn arrays_compare_in_order_and_objects_compare_exact_keys() {
+    use semantic::{Node, equal_nodes};
+    let a = [1u8, 2u8];
+    let b = [2u8, 1u8];
+    let same = |a: &u8, b: &u8| -> (r: bool) ensures r == (*a == *b) { *a == *b };
+    let node: Node<PairCursor<'_>, u8> = Node::Array(&a);
+    let reordered = equal_nodes(node, Node::Array(&b), same, same);
+    proof { if reordered {
+        assert(same.ensures((&a@[0], &b@[0]), true));
+    } }
+    expect(!reordered);
+    let node: Node<PairCursor<'_>, u8> = Node::Array(&a);
+    let unchanged = equal_nodes(node, Node::Array(&a), same, same);
+    proof { if !unchanged {
+        let i = choose|i: usize| i < a.len() && #[trigger] same.ensures((&a@[i as int], &a@[i as int]), false);
+        assert(false);
+    } }
+    expect(unchanged);
+
+    let key = String::from_str("a");
+    let other = String::from_str("b");
+    let left = [(&key, &a[0])];
+    let right = [(&other, &a[0])];
+    let lhs = PairCursor { items: &left, at: 0 };
+    let rhs = PairCursor { items: &right, at: 0 };
+    use policy::ObjectCursor;
+    let ghost a_entries = lhs.remaining();
+    let ghost b_entries = rhs.remaining();
+    let equal_keys = equal_nodes(Node::Object(lhs), Node::Object(rhs), same, same);
+    proof { if equal_keys {
+        reveal_strlit("a");
+        reveal_strlit("b");
+        assert("a"@[0] == 'a' && "b"@[0] == 'b');
+        assert(a_entries.len() == 1 && b_entries.len() == 1);
+        assert(a_entries[0] == left@[0] && b_entries[0] == right@[0]);
+        assert(a_entries[0].0@ == b_entries[0].0@);
+        assert(false);
+    } }
+    expect(!equal_keys);
+}
+
+#[cfg_attr(not(verus_keep_ghost),test)]
+fn literal_and_wildcard_array_steps_pass_the_same_physical_index_and_stable_identity() {
+    let index = String::from_str("1");
+    let check = |row: &u8, depth: usize, component: &str, id: String, _s: u8|
+        -> (out: Result<u8, u8>)
+        ensures out == if *row == 12 && depth == 2 && component@ == "1"@ && id@ == "id:s"@ {
+            Ok::<u8,u8>(12)
+        } else { Err::<u8,u8>(3) }
+    {
+        if *row == 12 && depth == 2 && <&str>::exec_eq(component, "1")
+            && <&str>::exec_eq(id.as_str(), "id:s")
+        { Ok(12) } else { Err(3) }
+    };
+    let row = 12u8;
+    let any = semantic::select_array_child("*", index.as_str(), Some("id:s"), &row, 2, 0, &check);
+    let explicit = semantic::select_array_child("1", index.as_str(), Some("id:s"), &row, 2, 0, &check);
+    expect(matches!(any, Ok(12)));
+    expect(matches!(explicit, Ok(12)));
 }
 
 #[cfg_attr(not(verus_keep_ghost),test)]
